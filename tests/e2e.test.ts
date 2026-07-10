@@ -1,0 +1,108 @@
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { join } from 'node:path';
+import { chromium, type Browser, type Page } from 'playwright';
+import { startTestServer } from './helpers';
+import type { ShareMdServer } from '../src/server/index';
+import { AgentClient } from './mcp-client';
+
+let server: ShareMdServer;
+let vaultDir: string;
+let browser: Browser;
+let page: Page;
+let alice: AgentClient;
+let bob: AgentClient;
+
+beforeAll(async () => {
+  ({ server, vaultDir } = await startTestServer());
+  browser = await chromium.launch();
+  page = await browser.newPage();
+  [alice, bob] = await Promise.all([
+    AgentClient.spawn(server.url, 'Alice'),
+    AgentClient.spawn(server.url, 'Bob'),
+  ]);
+});
+
+afterAll(async () => {
+  await Promise.all([alice.close(), bob.close()]);
+  await browser.close();
+  await server.stop();
+});
+
+function waitForText(selector: string, text: string, timeoutMs = 10_000) {
+  return page.waitForFunction(
+    ({ sel, needle }) => document.querySelector(sel)?.textContent?.includes(needle) ?? false,
+    { sel: selector, needle: text },
+    { timeout: timeoutMs },
+  );
+}
+
+test(
+  'two MCP agents and a human edit the same document concurrently without losing anything',
+  async () => {
+    // Human opens demo.md in the real web UI.
+    await page.goto(`${server.url}/?name=Human&doc=demo.md`);
+    await waitForText('.cm-content', 'Demo document');
+
+    // Agents join the same document over MCP.
+    await alice.call('open_document', { path: 'demo.md' });
+    await bob.call('open_document', { path: 'demo.md' });
+
+    // Human sees both agents in the presence bar.
+    await waitForText('#presence', 'Alice');
+    await waitForText('#presence', 'Bob');
+
+    // All three edit at the same time.
+    const humanEdits = (async () => {
+      await page.locator('.cm-content').click();
+      await page.keyboard.press('ControlOrMeta+ArrowUp'); // jump to document start
+      await page.keyboard.type('HUMAN: typed live from the browser\n', { delay: 15 });
+    })();
+
+    const aliceEdits = (async () => {
+      await alice.call('begin_edit', { mode: 'append' });
+      await alice.call('append_text', { text: '\n## Alice was here\n\nALICE: first paragraph, streamed.\n' });
+      await alice.call('append_text', { text: '\nALICE: second paragraph, streamed.\n' });
+      await alice.call('commit_edit');
+    })();
+
+    const bobEdits = (async () => {
+      const { matches } = await bob.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+        query: '- Second note',
+      });
+      await bob.call('place_cursor', { matchId: matches[0]!.matchId, edge: 'end' });
+      await bob.call('insert_text', { text: ' (BOB: reviewed this note)' });
+      await bob.call('begin_edit', { mode: 'append' });
+      await bob.call('append_text', { text: '\nBOB: appended a closing line.\n' });
+      await bob.call('commit_edit');
+    })();
+
+    await Promise.all([humanEdits, aliceEdits, bobEdits]);
+
+    // Everyone converges: the browser shows all three contributions.
+    await waitForText('.cm-content', 'HUMAN: typed live from the browser');
+    await waitForText('.cm-content', 'ALICE: second paragraph, streamed.');
+    await waitForText('.cm-content', 'BOB: reviewed this note');
+
+    // And the merged result is persisted to the markdown file on disk.
+    await server.registry.flushAll();
+    const onDisk = await Bun.file(join(vaultDir, 'demo.md')).text();
+    expect(onDisk).toInclude('HUMAN: typed live from the browser');
+    expect(onDisk).toInclude('ALICE: first paragraph, streamed.');
+    expect(onDisk).toInclude('ALICE: second paragraph, streamed.');
+    expect(onDisk).toInclude('- Second note (BOB: reviewed this note)');
+    expect(onDisk).toInclude('BOB: appended a closing line.');
+    expect(onDisk).toInclude('# Demo document'); // original content intact
+    expect(onDisk).toInclude('- First note');
+  },
+  90_000,
+);
+
+test(
+  'agents read live human edits back over MCP',
+  async () => {
+    const read = await alice.call<{ text: string }>('read_document', { maxChars: 20_000 });
+    expect(read.text).toInclude('HUMAN: typed live from the browser');
+    expect(read.text).toInclude('BOB: appended a closing line.');
+  },
+  30_000,
+);
