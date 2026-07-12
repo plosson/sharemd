@@ -29,6 +29,7 @@ describe('sharemd MCP', () => {
       'abort_edit',
       'append_text',
       'begin_edit',
+      'blame_document',
       'commit_edit',
       'delete_range',
       'insert_text',

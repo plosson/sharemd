@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { DocumentSession, type AgentIdentity } from './session';
+import { blameLines, type BlameLine } from '../shared/blame';
 
 /**
  * Editing runtime for one agent. Match handles and the cursor are stored as Yjs
@@ -154,6 +155,25 @@ export class AgentRuntime {
     const start = Math.max(0, Math.min(startChar, content.length));
     const end = Math.min(content.length, start + maxChars);
     return { text: content.slice(start, end), charCount: content.length, startChar: start, endChar: end };
+  }
+
+  /** Per-line authorship, computed locally from this peer's CRDT replica. */
+  blameDocument(startLine = 1, maxLines = 200): {
+    lines: BlameLine[];
+    lineCount: number;
+    startLine: number;
+    endLine: number;
+  } {
+    const session = this.requireSession();
+    const all = blameLines(session.doc);
+    const start = Math.max(1, Math.min(startLine, all.length + 1));
+    const window = all.slice(start - 1, start - 1 + maxLines);
+    return {
+      lines: window,
+      lineCount: all.length,
+      startLine: start,
+      endLine: start + window.length - 1,
+    };
   }
 
   searchText(query: string, maxResults = 8): MatchResult[] {
