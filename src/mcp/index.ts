@@ -90,6 +90,19 @@ server.registerTool(
 );
 
 server.registerTool(
+  'blame_document',
+  {
+    description:
+      'Per-line authorship of the open document, git-blame style: each line lists every author who wrote surviving characters on it (with char counts). Authorship comes from the CRDT itself, so it survives concurrent edits.',
+    inputSchema: {
+      startLine: z.number().int().min(1).optional(),
+      maxLines: z.number().int().min(1).max(1000).optional(),
+    },
+  },
+  ({ startLine, maxLines }) => respond(() => runtime.blameDocument(startLine ?? 1, maxLines ?? 200)),
+);
+
+server.registerTool(
   'place_cursor',
   {
     description:

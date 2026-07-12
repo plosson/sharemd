@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
+import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 export interface AgentIdentity {
   name: string;
@@ -11,7 +12,8 @@ export type AgentStatus = 'idle' | 'composing';
 
 /** A live Yjs peer connection to one sharemd document. */
 export class DocumentSession {
-  readonly doc = new Y.Doc();
+  // gc:false so locally-synced deleted items survive for blame computation.
+  readonly doc = new Y.Doc({ gc: false });
   readonly provider: WebsocketProvider;
   readonly ytext: Y.Text;
   readonly origin: { source: 'agent'; name: string };
@@ -22,7 +24,8 @@ export class DocumentSession {
     readonly identity: AgentIdentity,
   ) {
     this.origin = { source: 'agent', name: identity.name };
-    this.ytext = this.doc.getText('content');
+    this.ytext = this.doc.getText(TEXT_KEY);
+    registerAuthor(this.doc, { name: identity.name, color: identity.color, role: 'agent' });
     this.provider = new WebsocketProvider(serverWsBase, path, this.doc, {
       disableBc: true,
       maxBackoffTime: 4000,

@@ -32,10 +32,16 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 
 ## Invariants
 
-- The Y.Doc text key is `content`; the room name is the vault-relative file path. Both are
-  shared contracts between server, client, and MCP — change them everywhere or nowhere.
+- The Y.Doc text key is `content`; the authorship map key is `authors` (clientID →
+  identity, see `src/shared/blame.ts`); the room name is the vault-relative file path. All
+  are shared contracts between server, client, and MCP — change them everywhere or nowhere.
+- Docs that compute blame (server rooms, MCP sessions) are created with `gc: false` so
+  deleted items survive for snapshot diffs; peers must register in the `authors` map on
+  connect, before their first edit.
 - The server is the **sole writer** of vault files. There is deliberately no file watcher:
   external disk edits while the server runs are unsupported (decision, not an oversight).
+  The markdown file stays the source of truth for content; `.sharemd/<path>.yjs` sidecars
+  only add history, and any divergence is reconciled as a "disk"-authored edit on hydrate.
 - Editing tools must anchor with relative positions, never raw character offsets held
   across await points — other peers edit between tool calls.
 - Agent identity comes from the MCP config env (`SHAREMD_AGENT_NAME`, optional

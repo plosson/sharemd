@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { yCollab } from 'y-codemirror.next';
 import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
+import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 const PALETTE = [
   { color: '#2f7fd1', light: '#2f7fd133' },
@@ -73,10 +74,11 @@ function openDocument(path: string) {
   const doc = new Y.Doc();
   const wsBase = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
   const provider = new WebsocketProvider(wsBase, path, doc, { disableBc: true });
-  const ytext = doc.getText('content');
+  const ytext = doc.getText(TEXT_KEY);
   const undoManager = new Y.UndoManager(ytext);
 
   provider.awareness.setLocalStateField('user', user);
+  registerAuthor(doc, { name: user.name, color: user.color, role: 'human' });
   provider.awareness.on('change', () => renderPresence(provider));
   provider.on('status', ({ status }: { status: string }) => {
     statusEl.textContent = status;

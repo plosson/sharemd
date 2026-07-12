@@ -4,25 +4,65 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import type { Vault } from './vault';
+import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
 export const MESSAGE_QUERY_AWARENESS = 3;
 
-export const TEXT_KEY = 'content';
+export { TEXT_KEY };
 const HYDRATE_ORIGIN = 'sharemd-hydrate';
+const DISK_AUTHOR = { name: 'disk', role: 'system' as const };
 
 export interface RoomSocket {
   send(data: Uint8Array): void;
 }
 
+/**
+ * Replace the ytext content with `target` via a minimal middle-splice (common
+ * prefix/suffix preserved), so unchanged text keeps its original authorship.
+ */
+function reconcileText(ytext: Y.Text, target: string): void {
+  const current = ytext.toString();
+  if (current === target) {
+    return;
+  }
+  const maxShared = Math.min(current.length, target.length);
+  let prefix = 0;
+  while (prefix < maxShared && current[prefix] === target[prefix]) {
+    prefix++;
+  }
+  // Never split a surrogate pair at the splice boundary.
+  if (prefix > 0 && current.charCodeAt(prefix - 1) >= 0xd800 && current.charCodeAt(prefix - 1) <= 0xdbff) {
+    prefix--;
+  }
+  let suffix = 0;
+  while (
+    suffix < maxShared - prefix &&
+    current[current.length - 1 - suffix] === target[target.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  const low = (s: string, fromEnd: number) => {
+    const code = s.charCodeAt(s.length - fromEnd);
+    return code >= 0xdc00 && code <= 0xdfff;
+  };
+  if (suffix > 0 && low(current, suffix) && low(target, suffix)) {
+    suffix--;
+  }
+  ytext.delete(prefix, current.length - prefix - suffix);
+  ytext.insert(prefix, target.slice(prefix, target.length - suffix));
+}
+
 /** One collaborative document: a Y.Doc hydrated from a vault file, persisted back on change. */
 export class Room {
-  readonly doc = new Y.Doc();
+  // gc:false keeps deleted items so authorship (and later, snapshot history) survives.
+  readonly doc = new Y.Doc({ gc: false });
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   private readonly sockets = new Map<RoomSocket, Set<number>>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPersisted: string | null = null;
+  private stateDirty = false;
   private persistChain: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -37,6 +77,7 @@ export class Room {
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.writeUpdate(encoder, update);
       this.broadcast(encoding.toUint8Array(encoder));
+      this.stateDirty = true;
       if (origin !== HYDRATE_ORIGIN) {
         this.schedulePersist();
       }
@@ -64,11 +105,30 @@ export class Room {
 
   static async open(name: string, vault: Vault, persistDebounceMs: number): Promise<Room> {
     const room = new Room(name, vault, persistDebounceMs);
-    const content = await vault.read(name);
-    if (content !== null) {
-      room.doc.transact(() => {
-        room.doc.getText(TEXT_KEY).insert(0, content);
-      }, HYDRATE_ORIGIN);
+    const [content, state] = await Promise.all([vault.read(name), vault.readState(name)]);
+
+    let hydratedFromState = false;
+    if (state) {
+      try {
+        Y.applyUpdate(room.doc, state, HYDRATE_ORIGIN);
+        hydratedFromState = true;
+      } catch (error) {
+        console.error(`sharemd: unreadable state sidecar for "${name}", rebuilding from markdown:`, error);
+      }
+    }
+
+    // The markdown file stays the source of truth for content; the sidecar only
+    // contributes history. Any divergence (offline edit, deleted file, corrupt
+    // sidecar) is reconciled as a minimal "disk"-authored edit.
+    const fileText = content ?? (hydratedFromState ? '' : null);
+    if (fileText !== null) {
+      const ytext = room.doc.getText(TEXT_KEY);
+      if (ytext.toString() !== fileText) {
+        room.doc.transact(() => {
+          registerAuthor(room.doc, DISK_AUTHOR);
+          reconcileText(ytext, fileText);
+        }, HYDRATE_ORIGIN);
+      }
       room.lastPersisted = content;
     }
     return room;
@@ -165,11 +225,16 @@ export class Room {
   persist(): Promise<void> {
     this.persistChain = this.persistChain.then(async () => {
       const content = this.doc.getText(TEXT_KEY).toString();
-      if (content === this.lastPersisted) {
-        return;
+      if (content !== this.lastPersisted) {
+        await this.vault.write(this.name, content);
+        this.lastPersisted = content;
       }
-      await this.vault.write(this.name, content);
-      this.lastPersisted = content;
+      // The sidecar also changes when content doesn't (authors map, tombstones),
+      // so it is tracked by update dirtiness rather than by text.
+      if (this.stateDirty) {
+        this.stateDirty = false;
+        await this.vault.writeState(this.name, Y.encodeStateAsUpdate(this.doc));
+      }
     });
     return this.persistChain;
   }

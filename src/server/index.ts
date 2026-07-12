@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import { Room, RoomRegistry, type RoomSocket } from './rooms';
 import { Vault } from './vault';
+import { blameLines } from '../shared/blame';
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'client');
 
@@ -63,6 +64,18 @@ export async function startServer({
           return undefined as unknown as Response;
         }
         return new Response('WebSocket upgrade required', { status: 426 });
+      }
+
+      if (url.pathname.startsWith('/api/blame/')) {
+        const docPath = decodeURIComponent(url.pathname.slice('/api/blame/'.length));
+        try {
+          const room = await registry.open(docPath);
+          return Response.json({ path: docPath, lines: blameLines(room.doc) });
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : 'Invalid document', {
+            status: 400,
+          });
+        }
       }
 
       switch (url.pathname) {
