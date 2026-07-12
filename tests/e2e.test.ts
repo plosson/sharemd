@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { startTestServer } from './helpers';
+import { connectPeer, startTestServer } from './helpers';
 import type { ShareMdServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -95,6 +95,42 @@ test(
     expect(onDisk).toInclude('- First note');
   },
   90_000,
+);
+
+test(
+  'remote edits flash a transient highlight attributed to the author',
+  async () => {
+    const carol = await connectPeer(server, 'demo.md');
+    try {
+      carol.provider.awareness.setLocalStateField('user', {
+        name: 'Carol',
+        color: '#8a4bbf',
+        colorLight: '#8a4bbf33',
+      });
+      await waitForText('#presence', 'Carol'); // awareness propagated to the browser
+      carol.text.insert(carol.text.length, '\nCAROL: watch this line appear highlighted\n');
+
+      // Badge with the author's name shows up on the inserted range…
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll('.sharemd-edit-badge')].some((el) =>
+            el.textContent?.includes('Carol'),
+          ) && document.querySelectorAll('.sharemd-remote-edit').length > 0,
+        undefined,
+        { timeout: 5000 },
+      );
+
+      // …and the highlight is transient: gone shortly after.
+      await page.waitForFunction(
+        () => document.querySelectorAll('.sharemd-edit-badge').length === 0,
+        undefined,
+        { timeout: 6000 },
+      );
+    } finally {
+      carol.destroy();
+    }
+  },
+  30_000,
 );
 
 test(

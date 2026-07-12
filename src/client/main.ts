@@ -3,6 +3,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { yCollab } from 'y-codemirror.next';
+import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
 
 const PALETTE = [
   { color: '#2f7fd1', light: '#2f7fd133' },
@@ -34,7 +35,12 @@ const docTitle = document.querySelector('#doc-title')!;
 const statusEl = document.querySelector('#status')! as HTMLElement;
 const presenceEl = document.querySelector('#presence')!;
 
-let current: { provider: WebsocketProvider; view: EditorView; doc: Y.Doc } | null = null;
+let current: {
+  provider: WebsocketProvider;
+  view: EditorView;
+  doc: Y.Doc;
+  cleanup: () => void;
+} | null = null;
 
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
@@ -53,6 +59,7 @@ function renderPresence(provider: WebsocketProvider) {
 
 function openDocument(path: string) {
   if (current) {
+    current.cleanup();
     current.view.destroy();
     current.provider.destroy();
     current.doc.destroy();
@@ -78,11 +85,18 @@ function openDocument(path: string) {
 
   const view = new EditorView({
     doc: ytext.toString(),
-    extensions: [basicSetup, markdown(), EditorView.lineWrapping, yCollab(ytext, provider.awareness, { undoManager })],
+    extensions: [
+      basicSetup,
+      markdown(),
+      EditorView.lineWrapping,
+      yCollab(ytext, provider.awareness, { undoManager }),
+      remoteEditExtension(),
+    ],
     parent: editorHost,
   });
+  const cleanup = wireRemoteEdits(view, ytext, provider, doc.clientID);
 
-  current = { provider, view, doc };
+  current = { provider, view, doc, cleanup };
   renderPresence(provider);
 }
 

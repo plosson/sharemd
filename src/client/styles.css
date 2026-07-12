@@ -112,3 +112,46 @@ body {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   line-height: 1.6;
 }
+
+.sharemd-remote-edit {
+  background-color: var(--sharemd-edit-bg, #88888833);
+  border-radius: 2px;
+  animation: sharemd-edit-fade 2s ease-out forwards;
+}
+
+@keyframes sharemd-edit-fade {
+  0%,
+  55% {
+    background-color: var(--sharemd-edit-bg, #88888833);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.sharemd-edit-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  margin-right: 4px;
+  border-radius: 8px;
+  color: #fff;
+  vertical-align: text-top;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  animation: sharemd-edit-fade-badge 2s ease-out forwards;
+}
+
+@keyframes sharemd-edit-fade-badge {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.25;
+  }
+}
