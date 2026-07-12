@@ -44,8 +44,11 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   only add history, and any divergence is reconciled as a "disk"-authored edit on hydrate.
 - Editing tools must anchor with relative positions, never raw character offsets held
   across await points — other peers edit between tool calls.
-- Agent identity comes from the MCP config env (`SHAREMD_AGENT_NAME`, optional
-  `SHAREMD_AGENT_COLOR`, `SHAREMD_SERVER`), not from tool arguments.
+- Peer identity comes from the MCP config env (`SHAREMD_USERNAME`, optional
+  `SHAREMD_AGENT_COLOR`, `SHAREMD_SERVER`), not from tool arguments. Convention (trust,
+  not auth): `owner/agent` (e.g. `plosson/claude`) means role `agent` linked to that human;
+  a plain name means role `human` — so an MCP peer can act as a human. The web UI asks for
+  a username (localStorage, logout clears it) and rejects `/` in it.
 - The MCP process must keep stdout clean (protocol channel) — diagnostics go to stderr.
 
 ## MCP config for an agent
@@ -58,7 +61,7 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
       "args": ["run", "<repo>/src/mcp/index.ts"],
       "env": {
         "SHAREMD_SERVER": "http://localhost:4321",
-        "SHAREMD_AGENT_NAME": "Alice"
+        "SHAREMD_USERNAME": "plosson/claude"
       }
     }
   }

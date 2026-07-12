@@ -18,7 +18,7 @@ export class AgentClient {
       env: {
         ...getDefaultEnvironment(),
         SHAREMD_SERVER: serverUrl,
-        SHAREMD_AGENT_NAME: name,
+        SHAREMD_USERNAME: name,
       },
       stderr: 'pipe',
     });

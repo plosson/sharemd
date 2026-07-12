@@ -14,13 +14,26 @@ const PALETTE = [
   { color: '#c23b64', light: '#c23b6433' },
 ];
 
-function localUser() {
-  const params = new URLSearchParams(location.search);
-  const name =
-    params.get('name') ||
-    localStorage.getItem('sharemd-name') ||
-    `Human-${Math.random().toString(36).slice(2, 6)}`;
-  localStorage.setItem('sharemd-name', name);
+const NAME_KEY = 'sharemd-name';
+
+/** Humans must not contain "/" — it is reserved for the owner/agent convention. */
+function usernameError(name: string): string | null {
+  if (!name) {
+    return 'Enter a name.';
+  }
+  if (name.includes('/')) {
+    return '"/" is reserved for agents (owner/agent) — pick a plain name.';
+  }
+  if (/\s/.test(name)) {
+    return 'No spaces — pick a single word.';
+  }
+  if (name.length > 40) {
+    return 'Keep it under 40 characters.';
+  }
+  return null;
+}
+
+function withColors(name: string) {
   let hash = 0;
   for (const char of name) {
     hash = (hash * 31 + char.charCodeAt(0)) | 0;
@@ -29,7 +42,48 @@ function localUser() {
   return { name, color: swatch.color, colorLight: swatch.light };
 }
 
-const user = localUser();
+/** Name from the URL (?name=, then stripped) or localStorage; null means "must ask". */
+function storedUser(): string | null {
+  const params = new URLSearchParams(location.search);
+  const fromParam = params.get('name')?.trim();
+  if (fromParam !== undefined) {
+    if (usernameError(fromParam) === null) {
+      localStorage.setItem(NAME_KEY, fromParam);
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete('name');
+    history.replaceState(null, '', url);
+  }
+  const stored = localStorage.getItem(NAME_KEY)?.trim() ?? '';
+  return usernameError(stored) === null ? stored : null;
+}
+
+function promptForUser(): Promise<string> {
+  const overlay = document.querySelector('#login')! as HTMLElement;
+  const form = document.querySelector('#login-form')! as HTMLFormElement;
+  const input = document.querySelector('#login-name')! as HTMLInputElement;
+  const errorEl = document.querySelector('#login-error')! as HTMLElement;
+  overlay.hidden = false;
+  input.focus();
+  return new Promise((resolve) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = input.value.trim();
+      const error = usernameError(name);
+      if (error) {
+        errorEl.textContent = error;
+        errorEl.hidden = false;
+        input.focus();
+        return;
+      }
+      localStorage.setItem(NAME_KEY, name);
+      overlay.hidden = true;
+      resolve(name);
+    });
+  });
+}
+
+let user: { name: string; color: string; colorLight: string };
 const docList = document.querySelector('#doc-list')!;
 const editorHost = document.querySelector('#editor')!;
 const docTitle = document.querySelector('#doc-title')!;
@@ -102,6 +156,18 @@ function openDocument(path: string) {
   renderPresence(provider);
 }
 
+function renderMe() {
+  const me = document.querySelector('#me')! as HTMLElement;
+  const meName = document.querySelector('#me-name')! as HTMLElement;
+  meName.textContent = user.name;
+  meName.style.background = user.color;
+  me.hidden = false;
+  document.querySelector('#logout')!.addEventListener('click', () => {
+    localStorage.removeItem(NAME_KEY);
+    location.reload();
+  });
+}
+
 async function init() {
   const response = await fetch('/api/docs');
   const { docs } = (await response.json()) as { docs: string[] };
@@ -120,4 +186,11 @@ async function init() {
   }
 }
 
-void init();
+async function main() {
+  const name = storedUser() ?? (await promptForUser());
+  user = withColors(name);
+  renderMe();
+  await init();
+}
+
+void main();

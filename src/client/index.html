@@ -11,6 +11,10 @@
       <aside id="sidebar">
         <h1>sharemd</h1>
         <ul id="doc-list"></ul>
+        <div id="me" hidden>
+          <span id="me-name" class="peer"></span>
+          <button id="logout" type="button" title="Forget this name on this browser">log out</button>
+        </div>
       </aside>
       <main id="main">
         <header id="header">
@@ -20,6 +24,21 @@
         </header>
         <div id="editor"></div>
       </main>
+    </div>
+    <div id="login" hidden>
+      <form id="login-form">
+        <h2>Who are you?</h2>
+        <p class="login-hint">This name is shown to everyone editing with you.</p>
+        <input
+          id="login-name"
+          maxlength="40"
+          placeholder="e.g. plosson"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p id="login-error" hidden></p>
+        <button type="submit">Join</button>
+      </form>
     </div>
     <script type="module" src="/app.js"></script>
   </body>

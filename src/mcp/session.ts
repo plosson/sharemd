@@ -6,6 +6,8 @@ export interface AgentIdentity {
   name: string;
   color: string;
   colorLight: string;
+  /** "agent" when the name is owner-scoped ("plosson/claude"), "human" otherwise. */
+  role: 'human' | 'agent';
 }
 
 export type AgentStatus = 'idle' | 'composing';
@@ -25,7 +27,7 @@ export class DocumentSession {
   ) {
     this.origin = { source: 'agent', name: identity.name };
     this.ytext = this.doc.getText(TEXT_KEY);
-    registerAuthor(this.doc, { name: identity.name, color: identity.color, role: 'agent' });
+    registerAuthor(this.doc, { name: identity.name, color: identity.color, role: identity.role });
     this.provider = new WebsocketProvider(serverWsBase, path, this.doc, {
       disableBc: true,
       maxBackoffTime: 4000,
@@ -34,7 +36,7 @@ export class DocumentSession {
       name: identity.name,
       color: identity.color,
       colorLight: identity.colorLight,
-      role: 'agent',
+      role: identity.role,
       status: 'idle' satisfies AgentStatus,
     });
   }

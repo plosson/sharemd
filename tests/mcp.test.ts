@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
+import { parseUsername, resolveIdentity } from '../src/mcp/identity';
 import type { ShareMdServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -11,7 +12,7 @@ let observer: TestPeer;
 
 beforeAll(async () => {
   ({ server, vaultDir } = await startTestServer());
-  agent = await AgentClient.spawn(server.url, 'Alice');
+  agent = await AgentClient.spawn(server.url, 'plosson/alice');
   observer = await connectPeer(server, 'demo.md');
 });
 
@@ -62,16 +63,34 @@ describe('sharemd MCP', () => {
     expect(read.text).toInclude('# Demo document');
   });
 
-  test('agent presence appears in the room with role=agent', async () => {
+  test('an owner-scoped username joins with role=agent', async () => {
     await waitFor(
       () =>
         [...observer.provider.awareness.getStates().values()].some(
           (state) =>
-            (state as { user?: { name?: string; role?: string } }).user?.name === 'Alice' &&
+            (state as { user?: { name?: string; role?: string } }).user?.name === 'plosson/alice' &&
             (state as { user?: { role?: string } }).user?.role === 'agent',
         ),
       { label: 'agent presence' },
     );
+  });
+
+  test('a slash-free username joins the room as a human peer', async () => {
+    const humanMcp = await AgentClient.spawn(server.url, 'hank');
+    try {
+      await humanMcp.call('open_document', { path: 'demo.md' });
+      await waitFor(
+        () =>
+          [...observer.provider.awareness.getStates().values()].some(
+            (state) =>
+              (state as { user?: { name?: string; role?: string } }).user?.name === 'hank' &&
+              (state as { user?: { role?: string } }).user?.role === 'human',
+          ),
+        { label: 'human-over-MCP presence' },
+      );
+    } finally {
+      await humanMcp.close();
+    }
   });
 
   test('search_text returns match handles with context', async () => {
@@ -164,5 +183,55 @@ describe('sharemd MCP', () => {
     expect(onDisk).toInclude('Third note (still anchored)');
     expect(onDisk).toInclude('Paragraph two.');
     expect(onDisk).not.toInclude('DRAFT THAT WILL BE ABORTED');
+  });
+});
+
+describe('username convention', () => {
+  test('a plain username is a human with no owner', () => {
+    expect(parseUsername('plosson')).toEqual({ name: 'plosson', owner: null, role: 'human' });
+  });
+
+  test('an owner-scoped username is an agent linked to its owner', () => {
+    expect(parseUsername('plosson/claude')).toEqual({
+      name: 'plosson/claude',
+      owner: 'plosson',
+      role: 'agent',
+    });
+    expect(parseUsername(' plosson/claude\n').name).toBe('plosson/claude');
+  });
+
+  test('rejects malformed usernames', () => {
+    const rejected = ['', '   ', 'a/b/c', 'plosson/', '/claude', '/', 'a b', 'plosson/cl aude', 'a\tb'];
+    for (const bad of rejected) {
+      let threw = false;
+      try {
+        parseUsername(bad);
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`expected "${bad}" to be rejected`);
+      }
+    }
+  });
+
+  test('resolveIdentity requires SHAREMD_USERNAME and derives role + color', () => {
+    expect(() => resolveIdentity({})).toThrow('SHAREMD_USERNAME is required');
+    const identity = resolveIdentity({ SHAREMD_USERNAME: 'plosson/claude' });
+    expect(identity.role).toBe('agent');
+    expect(identity.color).toMatch(/^#[0-9a-f]{6}$/);
+    expect(identity.colorLight).toBe(`${identity.color}33`);
+    expect(resolveIdentity({ SHAREMD_USERNAME: 'plosson' }).role).toBe('human');
+  });
+
+  test('a lingering legacy SHAREMD_AGENT_NAME gets a migration hint', () => {
+    expect(() => resolveIdentity({ SHAREMD_AGENT_NAME: 'Claude' })).toThrow(
+      /SHAREMD_AGENT_NAME was replaced by SHAREMD_USERNAME/,
+    );
+  });
+
+  test('SHAREMD_AGENT_COLOR overrides the derived color', () => {
+    const identity = resolveIdentity({ SHAREMD_USERNAME: 'plosson/claude', SHAREMD_AGENT_COLOR: '#123456' });
+    expect(identity.color).toBe('#123456');
   });
 });

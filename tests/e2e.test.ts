@@ -17,8 +17,8 @@ beforeAll(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
   [alice, bob] = await Promise.all([
-    AgentClient.spawn(server.url, 'Alice'),
-    AgentClient.spawn(server.url, 'Bob'),
+    AgentClient.spawn(server.url, 'plosson/alice'),
+    AgentClient.spawn(server.url, 'plosson/bob'),
   ]);
 });
 
@@ -47,9 +47,9 @@ test(
     await alice.call('open_document', { path: 'demo.md' });
     await bob.call('open_document', { path: 'demo.md' });
 
-    // Human sees both agents in the presence bar.
-    await waitForText('#presence', 'Alice');
-    await waitForText('#presence', 'Bob');
+    // Human sees both agents in the presence bar, marked as agents of their owner.
+    await waitForText('#presence', '🤖 plosson/alice');
+    await waitForText('#presence', '🤖 plosson/bob');
 
     // All three edit at the same time.
     const humanEdits = (async () => {
@@ -139,6 +139,47 @@ test(
     const read = await alice.call<{ text: string }>('read_document', { maxChars: 20_000 });
     expect(read.text).toInclude('HUMAN: typed live from the browser');
     expect(read.text).toInclude('BOB: appended a closing line.');
+  },
+  30_000,
+);
+
+test(
+  'first visit asks who you are, rejects "/", remembers the name, and logout forgets it',
+  async () => {
+    const context = await browser.newContext();
+    const visitor = await context.newPage();
+    try {
+      // No stored name: the login overlay blocks the app.
+      await visitor.goto(server.url);
+      await visitor.waitForSelector('#login-form', { state: 'visible' });
+
+      // "/" is reserved for agents and must be rejected for humans.
+      await visitor.fill('#login-name', 'plosson/fake-agent');
+      await visitor.click('#login-form button[type=submit]');
+      await visitor.waitForSelector('#login-error:not([hidden])');
+      expect(await visitor.textContent('#login-error')).toInclude('reserved for agents');
+
+      // A valid name joins and is remembered.
+      await visitor.fill('#login-name', 'Dana');
+      await visitor.click('#login-form button[type=submit]');
+      await visitor.waitForSelector('#login', { state: 'hidden' });
+      await visitor.waitForSelector('#me:not([hidden])');
+      expect(await visitor.textContent('#me-name')).toBe('Dana');
+      expect(await visitor.evaluate(() => localStorage.getItem('sharemd-name'))).toBe('Dana');
+      await visitor.waitForSelector('.cm-content'); // the editor loads only after login
+
+      // Reload skips the prompt.
+      await visitor.reload();
+      await visitor.waitForSelector('#me:not([hidden])');
+      expect(await visitor.isVisible('#login-form')).toBe(false);
+
+      // Logout clears the stored name and asks again.
+      await visitor.click('#logout');
+      await visitor.waitForSelector('#login-form', { state: 'visible' });
+      expect(await visitor.evaluate(() => localStorage.getItem('sharemd-name'))).toBeNull();
+    } finally {
+      await context.close();
+    }
   },
   30_000,
 );

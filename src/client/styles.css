@@ -20,7 +20,8 @@ body {
   border-right: 1px solid #ddd;
   padding: 12px;
   background: #fafafa;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 #sidebar h1 {
@@ -31,6 +32,92 @@ body {
 #doc-list {
   list-style: none;
   padding: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+#me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #ddd;
+}
+
+#me[hidden] {
+  display: none;
+}
+
+#logout {
+  margin-left: auto;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: #888;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+#logout:hover {
+  color: #333;
+}
+
+#login {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fafafaee;
+  z-index: 10;
+}
+
+#login[hidden] {
+  display: none;
+}
+
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 280px;
+  padding: 24px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 30px #00000014;
+}
+
+#login-form h2 {
+  font-size: 16px;
+}
+
+.login-hint {
+  font-size: 12px;
+  color: #666;
+}
+
+#login-name {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+#login-error {
+  font-size: 12px;
+  color: #c2352b;
+}
+
+#login-form button {
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: #2f7fd1;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 #doc-list li {

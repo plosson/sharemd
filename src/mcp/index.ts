@@ -2,22 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentRuntime } from './runtime';
+import { resolveIdentity } from './identity';
 import type { AgentIdentity } from './session';
 
-const PALETTE = ['#e05252', '#2f7fd1', '#1a9c74', '#c2571f', '#8a4bbf', '#c23b64'];
-
-function resolveIdentity(): AgentIdentity {
-  const name = process.env.SHAREMD_AGENT_NAME;
-  if (!name) {
-    console.error('SHAREMD_AGENT_NAME is required — set it in the MCP server config env.');
+function identityFromEnv(): AgentIdentity {
+  try {
+    return resolveIdentity(process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  let hash = 0;
-  for (const char of name) {
-    hash = (hash * 31 + char.charCodeAt(0)) | 0;
-  }
-  const color = process.env.SHAREMD_AGENT_COLOR || PALETTE[Math.abs(hash) % PALETTE.length]!;
-  return { name, color, colorLight: `${color}33` };
 }
 
 function resolveServerUrls(): { wsBase: string; httpBase: string } {
@@ -27,7 +21,7 @@ function resolveServerUrls(): { wsBase: string; httpBase: string } {
   return { wsBase, httpBase };
 }
 
-const identity = resolveIdentity();
+const identity = identityFromEnv();
 const { wsBase, httpBase } = resolveServerUrls();
 const runtime = new AgentRuntime(wsBase, httpBase, identity);
 
