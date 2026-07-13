@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import { Room, RoomRegistry, type RoomSocket } from './rooms';
@@ -38,6 +39,7 @@ export async function startServer({
   vaultDir: string;
   port?: number;
 }): Promise<ShareMdServer> {
+  await mkdir(vaultDir, { recursive: true }); // fresh deploys start with an empty vault
   const vault = new Vault(vaultDir);
   const registry = new RoomRegistry(vault);
   const [clientBundle, indexHtml, styles] = await Promise.all([

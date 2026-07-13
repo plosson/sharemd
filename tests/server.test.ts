@@ -25,6 +25,22 @@ async function peer(docPath: string): Promise<TestPeer> {
 }
 
 describe('sharemd server', () => {
+  test('starts with a nonexistent vault directory (fresh deploy)', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const parent = await mkdtemp(join(tmpdir(), 'sharemd-fresh-'));
+    const { startServer } = await import('../src/server/index');
+    const fresh = await startServer({ vaultDir: join(parent, 'does-not-exist-yet'), port: 0 });
+    try {
+      const response = await fetch(`${fresh.url}/api/docs`);
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { docs: string[] }).docs).toEqual([]);
+    } finally {
+      await fresh.stop();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   test('lists vault documents over HTTP', async () => {
     const response = await fetch(`${server.url}/api/docs`);
     const { docs } = (await response.json()) as { docs: string[] };
