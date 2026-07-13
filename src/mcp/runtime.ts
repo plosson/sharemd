@@ -82,17 +82,28 @@ export class AgentRuntime {
 
   async listDocuments(): Promise<string[]> {
     const response = await fetch(
-      `${this.serverHttpBase}/api/docs?project=${encodeURIComponent(this.project)}`,
+      `${this.serverHttpBase}/api/projects/${encodeURIComponent(this.project)}/docs`,
     );
     if (!response.ok) {
-      throw new Error(`Failed to list documents: HTTP ${response.status}`);
+      const detail =
+        response.status === 404 ? `project "${this.project}" does not exist on the server` : `HTTP ${response.status}`;
+      throw new Error(`Failed to list documents: ${detail}`);
     }
     const { docs } = (await response.json()) as { docs: string[] };
-    return docs.map((doc) => doc.slice(this.project.length + 1));
+    return docs;
   }
 
   async openDocument(path: string): Promise<{ path: string; charCount: number }> {
     const vaultPath = this.vaultPath(path);
+    const relative = this.relativePath(vaultPath);
+    // Agents only ever edit: opening cannot create a document, so fail with
+    // guidance instead of hanging on a room the server will refuse.
+    const docs = await this.listDocuments();
+    if (!docs.includes(relative)) {
+      throw new Error(
+        `Document "${relative}" does not exist in project "${this.project}". Documents are created, renamed, and deleted by humans in the web UI — call list_documents to see what exists.`,
+      );
+    }
     if (this.edit) {
       this.abortEdit();
     }

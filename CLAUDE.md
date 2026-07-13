@@ -24,11 +24,14 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 - `src/server/` — Bun HTTP + WebSocket server speaking the standard y-websocket wire
   protocol (`/ws/<vault-relative-path>`, one Yjs room per file). Rooms hydrate from disk
   and persist back debounced (400ms); every update is also appended to an NDJSON history
-  log served at `/api/history/<path>`. `vault.ts` guards path traversal and file types,
-  and owns the project model: top-level vault directories are projects, every document
-  lives inside one (`/api/projects` lists them, `/api/docs?project=` filters). Documents
-  get stable path URLs — the server serves the app shell for `/<project>/<doc-path>` and
-  bare `/<project>` pages (view state stays in the URL hash).
+  log. `vault.ts` guards path traversal and file types, and owns the project model:
+  top-level vault directories are projects, every document lives inside one. `api.ts`
+  is the REST CRUD surface (`/api/projects[/:p[/docs[/*doc[/history|/blame]]]]` — see
+  its header comment for the route table); create/rename/move/delete coordinate with
+  `rooms.ts` (flush-and-close or discard-and-close) so no straggling persist can
+  resurrect a deleted file. Documents get stable path URLs — the server serves the app
+  shell for `/<project>/<doc-path>` and bare `/<project>` pages (view state stays in
+  the URL hash).
 - `src/client/` — web UI, bundled (minified) by `Bun.build` at server startup (no build
   step). CodeMirror 6 + `y-codemirror.next` for remote cursors; `remote-edits.ts` flashes
   transient author-attributed highlights on remote inserts; `comments.ts` (thread panel +
@@ -74,8 +77,12 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   the vault-relative path, and the web URL `/<project>/<doc-path>` are the same string.
   Project names cannot shadow server routes (`api`, `ws`, `app.js`, `styles.css`,
   `install.sh`, `install.ps1`) or start with a dot. Pre-projects vaults are migrated once
-  at startup: root documents (and their `.mdio/` sidecars) move into `main/`, and legacy
-  `#doc=` / root-doc links resolve through the default project in the client.
+  at startup: root documents (and their `.mdio/` sidecars) move into `main/`.
+- Rooms exist only for documents already on disk — connecting never creates anything.
+  All lifecycle (create/rename/move/delete of projects and documents) is explicit REST,
+  done by humans through the web UI. Agents are deliberately edit-only: the MCP exposes
+  no CRUD tools, and `open_document` refuses paths that don't exist. That split is the
+  point of the tool — humans own the document set, agents work inside it.
 - An MCP peer is scoped to exactly one project (`MDIO_PROJECT`, required): tool paths are
   project-relative (`notes.md`, not `main/notes.md`), `list_documents` sees nothing else,
   and the runtime prefixes the project onto room names. Like identity, this is

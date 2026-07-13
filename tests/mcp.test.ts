@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
+import { apiCreateDoc, connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
 import { parseUsername, resolveIdentity } from '../src/mcp/identity';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
@@ -74,15 +74,20 @@ describe('mdio MCP', () => {
   });
 
   test('the peer is fenced into its project: no other project is visible or reachable', async () => {
-    const stranger = await connectPeer(server, 'secret/hidden.md');
-    stranger.text.insert(0, '# Hidden\n');
-    await server.registry.flushAll();
-    stranger.destroy();
-
+    await apiCreateDoc(server, 'secret/hidden.md');
     const { docs } = await agent.call<{ docs: string[] }>('list_documents');
     expect(docs).not.toContain('secret/hidden.md');
+    expect(docs).not.toContain('hidden.md');
     const escape = await agent.callExpectingError('open_document', { path: '../secret/hidden.md' });
     expect(escape).toInclude('relative to your project');
+  });
+
+  test('agents cannot create documents: opening a missing path fails with guidance', async () => {
+    const message = await agent.callExpectingError('open_document', { path: 'not-yet-written.md' });
+    expect(message).toInclude('does not exist');
+    expect(message).toInclude('humans');
+    // And nothing appeared on disk as a side effect.
+    expect(await Bun.file(join(vaultDir, 'main', 'not-yet-written.md')).exists()).toBe(false);
   });
 
   test('tools before open_document fail with guidance', async () => {

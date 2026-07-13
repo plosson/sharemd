@@ -3,7 +3,7 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
-import type { Vault } from './vault';
+import { NotFoundError, type Vault } from './vault';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 export const MESSAGE_SYNC = 0;
@@ -16,6 +16,8 @@ const DISK_AUTHOR = { name: 'disk', role: 'system' as const };
 
 export interface RoomSocket {
   send(data: Uint8Array): void;
+  /** Server-side disconnect, used when the room's document is deleted or moved. */
+  close?(): void;
 }
 
 /**
@@ -67,6 +69,8 @@ export class Room {
   /** Off until hydration settles so the initial state application isn't logged twice. */
   private logEnabled = false;
   private logChain: Promise<void> = Promise.resolve();
+  /** Set when the room's document was deleted or moved — stop persisting, drop peers. */
+  private closedFlag = false;
 
   private constructor(
     readonly name: string,
@@ -199,6 +203,9 @@ export class Room {
   }
 
   handleMessage(socket: RoomSocket, data: Uint8Array): void {
+    if (this.closedFlag) {
+      return; // in-flight messages racing a delete/rename must not touch the doc
+    }
     const decoder = decoding.createDecoder(data);
     const messageType = decoding.readVarUint(decoder);
     switch (messageType) {
@@ -245,6 +252,9 @@ export class Room {
   }
 
   private schedulePersist(): void {
+    if (this.closedFlag) {
+      return;
+    }
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
     }
@@ -279,6 +289,29 @@ export class Room {
     await this.persist();
     await this.logChain;
   }
+
+  /**
+   * Shut the room down for a document delete/rename: stop future persists,
+   * settle in-flight writes (a straggler must not resurrect deleted files),
+   * and disconnect every peer. `flush` persists pending changes first — wanted
+   * for a rename, not for a delete.
+   */
+  async close({ flush }: { flush: boolean }): Promise<void> {
+    this.closedFlag = true;
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    if (flush) {
+      void this.persist();
+    }
+    await this.persistChain;
+    await this.logChain;
+    for (const socket of this.sockets.keys()) {
+      socket.close?.();
+    }
+    this.sockets.clear();
+  }
 }
 
 export class RoomRegistry {
@@ -293,11 +326,35 @@ export class RoomRegistry {
     let room = this.rooms.get(name);
     if (!room) {
       this.vault.resolvePath(name); // reject invalid paths before caching a room
-      room = Room.open(name, this.vault, this.persistDebounceMs);
+      room = (async () => {
+        // Rooms exist only for documents on disk — creation is an explicit
+        // REST operation, never a side effect of connecting.
+        if (!(await this.vault.exists(name))) {
+          throw new NotFoundError(`Document "${name}" does not exist.`);
+        }
+        return Room.open(name, this.vault, this.persistDebounceMs);
+      })();
       room.catch(() => this.rooms.delete(name));
       this.rooms.set(name, room);
     }
     return room;
+  }
+
+  /** Close and forget a room (no-op if it isn't open). See Room.close for `flush`. */
+  async release(name: string, opts: { flush: boolean }): Promise<void> {
+    const pending = this.rooms.get(name);
+    if (!pending) {
+      return;
+    }
+    this.rooms.delete(name);
+    const room = await pending.catch(() => null);
+    await room?.close(opts);
+  }
+
+  /** Release every room of a project (for project rename/delete). */
+  async releaseProject(project: string, opts: { flush: boolean }): Promise<void> {
+    const names = [...this.rooms.keys()].filter((name) => name.startsWith(`${project}/`));
+    await Promise.all(names.map((name) => this.release(name, opts)));
   }
 
   async flushAll(): Promise<void> {

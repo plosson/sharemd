@@ -107,7 +107,7 @@ describe('history log', () => {
       label: 'server to receive edit',
     });
 
-    const response = await fetch(`${server.url}/api/history/main/other.md`);
+    const response = await fetch(`${server.url}/api/projects/main/docs/other.md/history`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toStartWith('application/x-ndjson');
     const entries = (await response.text())
@@ -119,7 +119,7 @@ describe('history log', () => {
       });
     expect(replayText(entries)).toBe(alice.text.toString());
 
-    const invalid = await fetch(`${server.url}/api/history/..%2Fescape.md`);
+    const invalid = await fetch(`${server.url}/api/projects/main/docs/..%2F..%2Fescape.md/history`);
     expect(invalid.status).toBe(400);
   });
 

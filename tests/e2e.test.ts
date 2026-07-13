@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { connectPeer, startTestServer, waitFor } from './helpers';
+import { apiCreateDoc, connectPeer, startTestServer, waitFor } from './helpers';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -40,7 +40,7 @@ test(
   'two MCP agents and a human edit the same document concurrently without losing anything',
   async () => {
     // Human opens main/demo.md in the real web UI.
-    await page.goto(`${server.url}/?name=Human&doc=main/demo.md`);
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
     await waitForText('.cm-content', 'Demo document');
 
     // Agents join the same document over MCP.
@@ -396,9 +396,9 @@ test(
 );
 
 test(
-  'url edge cases: filter state, click focus, direct paths, bad doc, stale comment, legacy links',
+  'url edge cases: filter state, click focus, direct paths, bad doc, stale comment',
   async () => {
-    // Legacy ?doc= was migrated into the path at boot: query is clean, doc is the path.
+    // The ?name= login shortcut was stripped at boot: query clean, doc is the path.
     expect(await page.evaluate(() => location.search)).toBe('');
     await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
@@ -428,19 +428,11 @@ test(
     await waitForText('#doc-title', 'main/demo.md');
     await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
-    // Legacy hash links (#doc=…) still resolve, and normalize to the path form.
     // A stale comment id is ignored: page loads, nothing focused, no errors.
-    await page.goto(`${server.url}/#doc=main/demo.md&comment=c-deleted-long-ago`);
+    await page.goto(`${server.url}/main/demo.md#comment=c-deleted-long-ago`);
     await page.waitForSelector('.cm-content');
     await waitForText('#doc-title', 'main/demo.md');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
     expect(await page.locator('.comment-card.focused').count()).toBe(0);
-
-    // Pre-projects links name root docs that were migrated into the default project.
-    await page.goto(`${server.url}/#doc=demo.md`);
-    await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'main/demo.md');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
   },
   30_000,
 );
@@ -489,15 +481,8 @@ test(
 test(
   'projects: the sidebar is scoped to one project and the switcher navigates between them',
   async () => {
-    // A second project springs into existence when a peer edits a doc in it.
-    const writer = await connectPeer(server, 'specs/plan.md');
-    writer.text.insert(0, '# Plan\n\nSpec things.\n');
-    const room = await server.registry.open('specs/plan.md');
-    await waitFor(() => room.doc.getText('content').toString().includes('# Plan'), {
-      label: 'server room to receive the edit',
-    });
-    writer.destroy();
-    await server.registry.flushAll(); // the project dir exists once the doc persists
+    // A second project with a document, created over the REST API.
+    await apiCreateDoc(server, 'specs/plan.md');
 
     await page.goto(`${server.url}/specs/plan.md`);
     await page.waitForSelector('.cm-content');
@@ -522,4 +507,102 @@ test(
     expect(await selected()).toBe('specs');
   },
   30_000,
+);
+
+test(
+  'humans CRUD projects and documents from the UI, with cancels and errors handled',
+  async () => {
+    type DialogHandler = (dialog: import('playwright').Dialog) => Promise<void>;
+    const queue: DialogHandler[] = [];
+    const alerts: string[] = [];
+    const onDialog = async (dialog: import('playwright').Dialog) => {
+      if (dialog.type() === 'alert') {
+        alerts.push(dialog.message());
+        await dialog.dismiss();
+        return;
+      }
+      const handler = queue.shift();
+      await (handler ? handler(dialog) : dialog.dismiss());
+    };
+    page.on('dialog', onDialog);
+    const selected = () =>
+      page.evaluate(() => (document.querySelector('#project-select') as HTMLSelectElement).value);
+    try {
+      // Starting point: the specs project from the previous test.
+      await page.goto(`${server.url}/specs/plan.md`);
+      await page.waitForSelector('.cm-content');
+
+      // Cancelling the prompt changes nothing.
+      queue.push((dialog) => dialog.dismiss());
+      await page.click('#project-new');
+      expect(await selected()).toBe('specs');
+      expect(await page.evaluate(() => location.pathname)).toBe('/specs/plan.md');
+
+      // A reserved project name is rejected and surfaced as an alert.
+      queue.push((dialog) => dialog.accept('api'));
+      await page.click('#project-new');
+      await waitFor(() => alerts.some((message) => message.includes('reserved')), {
+        label: 'reserved-name error alert',
+      });
+      expect(await selected()).toBe('specs');
+
+      // Create a project: URL becomes its page, sidebar is empty.
+      queue.push((dialog) => dialog.accept('research'));
+      await page.click('#project-new');
+      await page.waitForFunction(() => location.pathname === '/research');
+      expect(await selected()).toBe('research');
+      expect(await page.locator('#doc-list li').count()).toBe(0);
+
+      // Create a document — the .md extension is implied.
+      queue.push((dialog) => dialog.accept('ideas'));
+      await page.click('#doc-new');
+      await page.waitForFunction(() => location.pathname === '/research/ideas.md');
+      await waitForText('#doc-title', 'research/ideas.md');
+      await page.locator('.cm-content').click();
+      await page.keyboard.type('# Ideas from the UI');
+      await waitForText('.cm-content', '# Ideas from the UI');
+
+      // Rename it: URL updates, content survives.
+      queue.push((dialog) => dialog.accept('brainstorm.md'));
+      await page.click('#doc-rename');
+      await page.waitForFunction(() => location.pathname === '/research/brainstorm.md');
+      await waitForText('#doc-title', 'research/brainstorm.md');
+      await waitForText('.cm-content', '# Ideas from the UI');
+
+      // Move it to another project: everything follows.
+      queue.push((dialog) => dialog.accept('main'));
+      await page.click('#doc-move');
+      await page.waitForFunction(() => location.pathname === '/main/brainstorm.md');
+      await waitForText('#doc-title', 'main/brainstorm.md');
+      await waitForText('.cm-content', '# Ideas from the UI');
+      expect(await selected()).toBe('main');
+
+      // Delete it: the UI falls back to the project's first document.
+      queue.push((dialog) => dialog.accept());
+      await page.click('#doc-delete');
+      await page.waitForFunction(() => location.pathname === '/main/demo.md');
+      expect(await page.locator('li[data-path="main/brainstorm.md"]').count()).toBe(0);
+
+      // Rename the (now empty) research project.
+      await page.selectOption('#project-select', 'research');
+      await page.waitForFunction(() => location.pathname === '/research');
+      queue.push((dialog) => dialog.accept('lab'));
+      await page.click('#project-rename');
+      await page.waitForFunction(() => location.pathname === '/lab');
+      expect(await selected()).toBe('lab');
+
+      // Delete it: back to the first remaining project, dropdown updated.
+      queue.push((dialog) => dialog.accept());
+      await page.click('#project-delete');
+      await page.waitForFunction(() => location.pathname === '/main/demo.md');
+      const options = await page.evaluate(() =>
+        [...document.querySelectorAll('#project-select option')].map((option) => option.textContent),
+      );
+      expect(options).not.toContain('lab');
+      expect(options).not.toContain('research');
+    } finally {
+      page.off('dialog', onDialog);
+    }
+  },
+  60_000,
 );

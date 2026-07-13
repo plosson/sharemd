@@ -35,9 +35,7 @@ function encodePath(path: string): string {
 
 export function readUrlState(): UrlState {
   const params = new URLSearchParams(location.hash.slice(1));
-  // Pre-path-URL links carried the doc in the hash (#doc=…) — honour them
-  // when the path itself names nothing; boot normalizes to the path form.
-  const path = decodePath(location.pathname) ?? params.get('doc');
+  const path = decodePath(location.pathname);
   const isDoc = path !== null && DOC_EXTENSION.test(path);
   return {
     doc: isDoc ? path : null,

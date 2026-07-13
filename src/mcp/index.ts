@@ -60,7 +60,7 @@ export async function runMcp(): Promise<void> {
     'open_document',
     {
       description:
-        'Open a document by project-relative path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document.',
+        'Open an existing document by project-relative path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document. Creating, renaming, or deleting documents is reserved to humans (web UI) — agents only edit and comment.',
       inputSchema: { path: z.string().min(1) },
     },
     ({ path }) => respond(() => runtime.openDocument(path)),

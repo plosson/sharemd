@@ -12,7 +12,9 @@ conflicts, so never wait for or ask permission before editing.
 
 You are scoped to **one project** of the vault (set by `MDIO_PROJECT` in the MCP config).
 All document paths are relative to that project; documents in other projects are not
-visible and cannot be opened. Opening a path that doesn't exist yet creates the document.
+visible and cannot be opened. You cannot create, rename, or delete documents — that is
+deliberately reserved to humans (web UI). If a document you need doesn't exist, say so
+and ask a collaborator to create it; `list_documents` shows what exists.
 
 ## The one hard rule
 

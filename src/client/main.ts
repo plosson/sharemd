@@ -8,6 +8,7 @@ import { commentHighlightExtension, focusThread, setShowResolved, wireComments }
 import { setPreviewEnabled, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
+import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 const PALETTE = [
@@ -89,8 +90,6 @@ function promptForUser(): Promise<string> {
 }
 
 let user: { name: string; color: string; colorLight: string };
-/** Pre-projects vaults' root documents were migrated here — legacy links follow them. */
-const DEFAULT_PROJECT = 'main';
 const projectSelect = document.querySelector('#project-select')! as HTMLSelectElement;
 const docList = document.querySelector('#doc-list')!;
 const editorHost = document.querySelector('#editor')!;
@@ -259,45 +258,21 @@ function renderDocList() {
 
 async function loadProject(project: string | null): Promise<void> {
   currentProject = project;
-  if (project) {
-    const response = await fetch(`/api/docs?project=${encodeURIComponent(project)}`);
-    ({ docs } = (await response.json()) as { docs: string[] });
-  } else {
-    docs = [];
-  }
+  docs = project ? (await api.listDocs(project)).map((rel) => `${project}/${rel}`) : [];
   renderProjectSelect();
   renderDocList();
 }
 
-/**
- * Map a requested doc to one that exists: legacy pre-projects links name root
- * documents that were migrated into the default project; anything still
- * unknown falls back to the first doc of the current project.
- */
-function resolveRequested(requested: string | null): string | null {
-  if (requested && docs.includes(requested)) {
-    return requested;
-  }
-  if (requested && !requested.includes('/') && docs.includes(`${DEFAULT_PROJECT}/${requested}`)) {
-    return `${DEFAULT_PROJECT}/${requested}`;
-  }
-  return docs[0] ?? null;
-}
-
 async function navigate(state: UrlState, urlMode: 'replace' | 'none') {
-  let requested = state.doc;
-  if (requested && !requested.includes('/')) {
-    requested = `${DEFAULT_PROJECT}/${requested}`; // legacy root-doc link
-  }
-  const project = requested?.split('/')[0] ?? state.project;
+  const project = state.doc?.split('/')[0] ?? state.project;
   const target = project && projects.includes(project) ? project : projects[0] ?? null;
   if (target !== currentProject) {
     await loadProject(target);
   }
-  const doc = resolveRequested(state.doc);
+  const doc = state.doc && docs.includes(state.doc) ? state.doc : docs[0] ?? null;
   if (doc && doc !== currentPath) {
-    // A rewritten (legacy or fallback) doc must normalize the URL even on
-    // back/forward navigation, or the address bar keeps the stale path.
+    // A fallback doc must normalize the URL even on back/forward navigation,
+    // or the address bar keeps the stale path.
     openDocument(doc, doc === state.doc && urlMode === 'none' ? 'none' : 'replace');
   } else if (!doc) {
     closeDocument();
@@ -306,22 +281,28 @@ async function navigate(state: UrlState, urlMode: 'replace' | 'none') {
   applyViewState(state);
 }
 
-async function init() {
-  const response = await fetch('/api/projects');
-  ({ projects } = (await response.json()) as { projects: string[] });
-
-  // Legacy ?doc= links migrate into the path, once.
-  const params = new URLSearchParams(location.search);
-  const legacy = params.get('doc');
-  if (legacy) {
-    params.delete('doc');
-    const query = params.toString();
-    history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+/** Open a project on the doc given (or its first doc), replacing the dead URL. */
+async function enterProject(project: string | null, doc?: string) {
+  await loadProject(project);
+  const target = doc && docs.includes(doc) ? doc : docs[0];
+  if (target) {
+    openDocument(target, 'replace');
+  } else {
+    closeDocument();
+    writeUrlState({ doc: null, project: currentProject, comment: null });
   }
+}
 
-  const urlState = readUrlState();
-  await navigate({ ...urlState, doc: urlState.doc ?? legacy }, 'replace');
+/** Run a CRUD action; API failures (conflicts, reserved names, …) surface as alerts. */
+async function attempt(action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    alert(error instanceof Error ? error.message : String(error));
+  }
+}
 
+function wireCrud() {
   projectSelect.addEventListener('change', async () => {
     await loadProject(projectSelect.value);
     if (docs[0]) {
@@ -332,6 +313,131 @@ async function init() {
     }
   });
 
+  document.querySelector('#project-new')!.addEventListener('click', () => {
+    const name = prompt('New project name')?.trim();
+    if (!name) {
+      return;
+    }
+    void attempt(async () => {
+      await api.createProject(name);
+      projects = await api.listProjects();
+      await enterProject(name);
+    });
+  });
+
+  document.querySelector('#project-rename')!.addEventListener('click', () => {
+    if (!currentProject) {
+      return;
+    }
+    const from = currentProject;
+    const to = prompt('Rename project', from)?.trim();
+    if (!to || to === from) {
+      return;
+    }
+    void attempt(async () => {
+      const rest = currentPath?.slice(from.length);
+      await api.renameProject(from, to);
+      projects = await api.listProjects();
+      await enterProject(to, rest ? `${to}${rest}` : undefined);
+    });
+  });
+
+  document.querySelector('#project-delete')!.addEventListener('click', () => {
+    if (!currentProject) {
+      return;
+    }
+    const name = currentProject;
+    if (!confirm(`Delete project "${name}" and all its documents?`)) {
+      return;
+    }
+    void attempt(async () => {
+      await api.deleteProject(name);
+      projects = await api.listProjects();
+      await enterProject(projects[0] ?? null);
+    });
+  });
+
+  document.querySelector('#doc-new')!.addEventListener('click', () => {
+    if (!currentProject) {
+      alert('Create a project first.');
+      return;
+    }
+    const project = currentProject;
+    const entered = prompt('Document name (e.g. notes.md or specs/plan.md)')?.trim();
+    if (!entered) {
+      return;
+    }
+    const path = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
+    void attempt(async () => {
+      await api.createDoc(project, path);
+      await loadProject(project);
+      openDocument(`${project}/${path}`);
+    });
+  });
+
+  document.querySelector('#doc-rename')!.addEventListener('click', () => {
+    if (!currentPath || !currentProject) {
+      return;
+    }
+    const project = currentProject;
+    const from = currentPath.slice(project.length + 1);
+    const entered = prompt('Rename document', from)?.trim();
+    if (!entered || entered === from) {
+      return;
+    }
+    const to = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
+    void attempt(async () => {
+      await api.moveDoc(`${project}/${from}`, { path: to });
+      await loadProject(project);
+      openDocument(`${project}/${to}`, 'replace');
+    });
+  });
+
+  document.querySelector('#doc-move')!.addEventListener('click', () => {
+    if (!currentPath || !currentProject) {
+      return;
+    }
+    const source = currentPath;
+    const others = projects.filter((name) => name !== currentProject);
+    if (others.length === 0) {
+      alert('There is no other project to move to.');
+      return;
+    }
+    const target = prompt(`Move to project (${others.join(', ')})`)?.trim();
+    if (!target || target === currentProject) {
+      return;
+    }
+    if (!projects.includes(target)) {
+      alert(`No such project: "${target}"`);
+      return;
+    }
+    void attempt(async () => {
+      const rel = source.slice(source.indexOf('/') + 1);
+      await api.moveDoc(source, { project: target });
+      await enterProject(target, `${target}/${rel}`);
+    });
+  });
+
+  document.querySelector('#doc-delete')!.addEventListener('click', () => {
+    if (!currentPath || !currentProject) {
+      return;
+    }
+    const path = currentPath;
+    const project = currentProject;
+    if (!confirm(`Delete "${path}"?`)) {
+      return;
+    }
+    void attempt(async () => {
+      await api.deleteDoc(path);
+      await enterProject(project);
+    });
+  });
+}
+
+async function init() {
+  projects = await api.listProjects();
+  await navigate(readUrlState(), 'replace');
+  wireCrud();
   // Back/forward and hand-edited URLs, same resolution as the boot path.
   onUrlChange((state) => void navigate(state, 'none'));
 }

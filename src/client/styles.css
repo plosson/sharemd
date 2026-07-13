@@ -29,15 +29,51 @@ body {
   margin-bottom: 12px;
 }
 
-#project-select {
-  width: 100%;
+#project-bar {
+  display: flex;
+  gap: 4px;
   margin-bottom: 10px;
+}
+
+#project-select {
+  flex: 1;
+  min-width: 0;
   padding: 4px 6px;
   font: inherit;
   font-size: 13px;
   border: 1px solid #ddd;
   border-radius: 4px;
   background: #fff;
+}
+
+#project-bar button {
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+#project-bar button:hover {
+  background: #f0f0f0;
+}
+
+#doc-new {
+  margin-top: 8px;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px dashed #ccc;
+  border-radius: 4px;
+  background: transparent;
+  color: #555;
+  cursor: pointer;
+  text-align: left;
+}
+
+#doc-new:hover {
+  background: #f0f0f0;
 }
 
 #doc-list {
@@ -187,7 +223,10 @@ body {
   margin-left: auto;
 }
 
-#history-open {
+#history-open,
+#doc-rename,
+#doc-move,
+#doc-delete {
   font-size: 11px;
   padding: 3px 10px;
   border: 1px solid #ccc;
@@ -195,11 +234,20 @@ body {
   background: #fff;
   color: #666;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-#history-open:hover {
+#history-open:hover,
+#doc-rename:hover,
+#doc-move:hover {
   background: #eee;
   color: #333;
+}
+
+#doc-delete:hover {
+  background: #fde8e8;
+  border-color: #c0392b;
+  color: #c0392b;
 }
 
 #history {

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
-import { appendFile, mkdir, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 
 const EDITABLE_EXTENSIONS = ['.md', '.markdown', '.txt'];
@@ -14,6 +14,11 @@ export const DEFAULT_PROJECT = 'main';
 
 /** Route names the web server claims — a project cannot shadow them. */
 const RESERVED_PROJECT_NAMES = new Set(['api', 'ws', 'app.js', 'styles.css', 'install.sh', 'install.ps1']);
+
+/** A referenced project or document that isn't there — maps to HTTP 404. */
+export class NotFoundError extends Error {}
+/** A create/rename target that already exists — maps to HTTP 409. */
+export class ConflictError extends Error {}
 
 /** Validate a project name (a single top-level directory segment). */
 export function assertProjectName(name: string): void {
@@ -77,13 +82,10 @@ export class Vault {
     if (cleaned === STATE_DIR || cleaned.startsWith(`${STATE_DIR}${sep}`)) {
       throw new Error(`Invalid document path: ${docPath}`);
     }
-    const project = cleaned.split(sep)[0]!;
     if (!cleaned.includes(sep)) {
       throw new Error(`Documents live inside a project: ${docPath} (expected <project>/<doc>)`);
     }
-    if (project.startsWith('.') || RESERVED_PROJECT_NAMES.has(project.toLowerCase())) {
-      throw new Error(`"${project}" is a reserved name — pick another project name.`);
-    }
+    assertProjectName(cleaned.split(sep)[0]!);
     if (!EDITABLE_EXTENSIONS.some((ext) => cleaned.toLowerCase().endsWith(ext))) {
       throw new Error(`Unsupported document type: ${docPath}`);
     }
@@ -92,6 +94,10 @@ export class Vault {
       throw new Error(`Invalid document path: ${docPath}`);
     }
     return absolute;
+  }
+
+  async exists(docPath: string): Promise<boolean> {
+    return Bun.file(this.resolvePath(docPath)).exists();
   }
 
   async read(docPath: string): Promise<string | null> {
@@ -152,27 +158,19 @@ export class Vault {
     await Bun.write(this.logFile(docPath), line);
   }
 
-  async list(project?: string): Promise<string[]> {
-    const entries = await readdir(this.root, { recursive: true, withFileTypes: true });
-    const docs: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      const parent = resolve(entry.parentPath ?? this.root);
-      const absolute = join(parent, entry.name);
-      const relative = absolute.slice(this.root.length + 1).split(sep).join('/');
-      try {
-        this.resolvePath(relative); // skips sidecars, root strays, reserved names
-      } catch {
-        continue;
-      }
-      if (project !== undefined && !relative.startsWith(`${project}/`)) {
-        continue;
-      }
-      docs.push(relative);
+  // ── projects ─────────────────────────────────────────────────────────
+
+  private projectDir(name: string): string {
+    assertProjectName(name);
+    return join(this.root, name);
+  }
+
+  private requireProject(name: string): string {
+    const dir = this.projectDir(name);
+    if (!existsSync(dir)) {
+      throw new NotFoundError(`Project "${name}" does not exist.`);
     }
-    return docs.sort();
+    return dir;
   }
 
   /** Top-level directories are projects; every document lives inside one. */
@@ -187,5 +185,101 @@ export class Vault {
       )
       .map((entry) => entry.name)
       .sort();
+  }
+
+  async createProject(name: string): Promise<void> {
+    const dir = this.projectDir(name);
+    if (existsSync(dir)) {
+      throw new ConflictError(`Project "${name}" already exists.`);
+    }
+    await mkdir(dir, { recursive: true });
+  }
+
+  /** Rename a project directory; its sidecar tree under STATE_DIR follows. */
+  async renameProject(from: string, to: string): Promise<void> {
+    const fromDir = this.requireProject(from);
+    const toDir = this.projectDir(to);
+    if (existsSync(toDir)) {
+      throw new ConflictError(`Project "${to}" already exists.`);
+    }
+    await rename(fromDir, toDir);
+    const fromState = join(this.root, STATE_DIR, from);
+    if (existsSync(fromState)) {
+      await rename(fromState, join(this.root, STATE_DIR, to));
+    }
+  }
+
+  /** Delete a project with all its documents and sidecars. */
+  async deleteProject(name: string): Promise<void> {
+    const dir = this.requireProject(name);
+    await rm(dir, { recursive: true });
+    await rm(join(this.root, STATE_DIR, name), { recursive: true, force: true });
+  }
+
+  // ── documents ────────────────────────────────────────────────────────
+
+  /** Documents of one project, as project-relative paths. */
+  async listDocs(project: string): Promise<string[]> {
+    const dir = this.requireProject(project);
+    const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+    const docs: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!EDITABLE_EXTENSIONS.some((ext) => entry.name.toLowerCase().endsWith(ext))) {
+        continue;
+      }
+      const absolute = join(resolve(entry.parentPath ?? dir), entry.name);
+      docs.push(absolute.slice(dir.length + 1).split(sep).join('/'));
+    }
+    return docs.sort();
+  }
+
+  /** Create an empty document; parent folders inside the project are created as needed. */
+  async createDoc(docPath: string): Promise<void> {
+    const absolute = this.resolvePath(docPath);
+    this.requireProject(docPath.split('/')[0]!);
+    if (existsSync(absolute)) {
+      throw new ConflictError(`Document "${docPath}" already exists.`);
+    }
+    await Bun.write(absolute, '');
+  }
+
+  private requireDoc(docPath: string): string {
+    const absolute = this.resolvePath(docPath);
+    if (!existsSync(absolute)) {
+      throw new NotFoundError(`Document "${docPath}" does not exist.`);
+    }
+    return absolute;
+  }
+
+  /** Delete a document and its sidecars. */
+  async deleteDoc(docPath: string): Promise<void> {
+    const absolute = this.requireDoc(docPath);
+    await rm(absolute);
+    await rm(this.stateFile(docPath), { force: true });
+    await rm(this.logFile(docPath), { force: true });
+  }
+
+  /** Rename/move a document (possibly across projects); sidecars follow. */
+  async moveDoc(fromPath: string, toPath: string): Promise<void> {
+    const fromAbsolute = this.requireDoc(fromPath);
+    const toAbsolute = this.resolvePath(toPath);
+    this.requireProject(toPath.split('/')[0]!);
+    if (existsSync(toAbsolute)) {
+      throw new ConflictError(`Document "${toPath}" already exists.`);
+    }
+    await mkdir(dirname(toAbsolute), { recursive: true });
+    await rename(fromAbsolute, toAbsolute);
+    for (const [from, to] of [
+      [this.stateFile(fromPath), this.stateFile(toPath)],
+      [this.logFile(fromPath), this.logFile(toPath)],
+    ] as const) {
+      if (existsSync(from)) {
+        await mkdir(dirname(to), { recursive: true });
+        await rename(from, to);
+      }
+    }
   }
 }

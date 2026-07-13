@@ -46,7 +46,8 @@ async function spawnAgent(server: MdioServer, name: string): Promise<AgentClient
 }
 
 async function fetchBlame(server: MdioServer, docPath: string): Promise<BlameLine[]> {
-  const response = await fetch(`${server.url}/api/blame/${docPath}`);
+  const [project, ...rest] = docPath.split('/');
+  const response = await fetch(`${server.url}/api/projects/${project}/docs/${rest.join('/')}/blame`);
   expect(response.status).toBe(200);
   const { lines } = (await response.json()) as { lines: BlameLine[] };
   return lines;
@@ -192,8 +193,12 @@ describe('blame over HTTP', () => {
 
   test('rejects traversal, sidecar-dir, and non-text paths', async () => {
     const { server } = await freshServer();
-    for (const bad of ['..%2Fsecret.md', `${STATE_DIR}%2Fmain/demo.md`, `${STATE_DIR}%2Fmain/demo.md.yjs`, 'app.exe']) {
-      const response = await fetch(`${server.url}/api/blame/${bad}`);
+    for (const bad of [
+      `/api/projects/main/docs/..%2F..%2Fsecret.md/blame`, // traversal out of the vault
+      `/api/projects/${STATE_DIR}/docs/main%2Fdemo.md.yjs/blame`, // the sidecar dir is not a project
+      `/api/projects/main/docs/app.exe/blame`, // not an editable document type
+    ]) {
+      const response = await fetch(`${server.url}${bad}`);
       expect(response.status).toBe(400);
     }
   });
@@ -204,8 +209,10 @@ describe('blame over HTTP', () => {
     alice.text.insert(0, 'force a sidecar write\n');
     await server.registry.flushAll();
 
-    const { docs } = (await (await fetch(`${server.url}/api/docs`)).json()) as { docs: string[] };
-    expect(docs).toEqual(['main/demo.md', 'main/other.md']);
+    const { docs } = (await (await fetch(`${server.url}/api/projects/main/docs`)).json()) as { docs: string[] };
+    expect(docs).toEqual(['demo.md', 'other.md']);
+    const { projects } = (await (await fetch(`${server.url}/api/projects`)).json()) as { projects: string[] };
+    expect(projects).not.toContain(STATE_DIR);
   });
 });
 
@@ -318,7 +325,7 @@ describe('blame persistence across restarts', () => {
     );
   });
 
-  test('deleting the markdown file wins over a surviving sidecar', async () => {
+  test('deleting the markdown file offline deletes the document, surviving sidecar or not', async () => {
     const { server, vaultDir } = await freshServer();
     const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(0, 'doomed\n');
@@ -330,10 +337,15 @@ describe('blame persistence across restarts', () => {
 
     await rm(join(vaultDir, 'main/demo.md'));
 
+    // The markdown file is the source of truth: no file, no document — the
+    // orphaned sidecar must not bring it back.
     const restarted = await restartServer(vaultDir);
-    const bob = await peer(restarted, 'main/demo.md');
-    expect(bob.text.toString()).toBe('');
-    expect(await fetchBlame(restarted, 'main/demo.md')).toEqual([]);
+    const { docs } = (await (await fetch(`${restarted.url}/api/projects/main/docs`)).json()) as {
+      docs: string[];
+    };
+    expect(docs).toEqual(['other.md']);
+    expect((await fetch(`${restarted.url}/ws/main/demo.md`)).status).toBe(404);
+    expect((await fetch(`${restarted.url}/api/projects/main/docs/demo.md/blame`)).status).toBe(404);
   });
 });
 

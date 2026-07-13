@@ -8,7 +8,7 @@
     "mcp": "bun run src/mcp/index.ts",
     "cli": "bun run src/cli/index.ts",
     "build:cli": "bun run scripts/build-cli.ts",
-    "test": "bun test tests/server.test.ts tests/mcp.test.ts tests/blame.test.ts tests/history.test.ts tests/comments.test.ts tests/cli.test.ts",
+    "test": "bun test tests/server.test.ts tests/crud.test.ts tests/mcp.test.ts tests/blame.test.ts tests/history.test.ts tests/comments.test.ts tests/cli.test.ts",
     "test:e2e": "bun test tests/e2e.test.ts",
     "test:all": "bun test"
   },
