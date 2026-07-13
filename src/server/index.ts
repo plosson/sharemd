@@ -3,9 +3,9 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import { Room, RoomRegistry, type RoomSocket } from './rooms';
-import { Vault } from './vault';
+import { NotFoundError, Vault } from './vault';
+import { apiError, handleProjectsApi } from './api';
 import { handleCliRoute } from './cli-routes';
-import { blameLines } from '../shared/blame';
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'client');
 
@@ -61,7 +61,7 @@ export async function startServer({
           room = await registry.open(docPath);
         } catch (error) {
           return new Response(error instanceof Error ? error.message : 'Invalid document', {
-            status: 400,
+            status: error instanceof NotFoundError ? 404 : 400,
           });
         }
         if (srv.upgrade(req, { data: { room, peer: null } satisfies SocketData })) {
@@ -70,31 +70,13 @@ export async function startServer({
         return new Response('WebSocket upgrade required', { status: 426 });
       }
 
-      if (url.pathname.startsWith('/api/history/')) {
-        const docPath = decodeURIComponent(url.pathname.slice('/api/history/'.length));
-        try {
-          const room = await registry.open(docPath);
-          await room.flushLog();
-          return new Response(await vault.readLog(docPath), {
-            headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
-          });
-        } catch (error) {
-          return new Response(error instanceof Error ? error.message : 'Invalid document', {
-            status: 400,
-          });
+      try {
+        const apiResponse = await handleProjectsApi(req, url, vault, registry);
+        if (apiResponse) {
+          return apiResponse;
         }
-      }
-
-      if (url.pathname.startsWith('/api/blame/')) {
-        const docPath = decodeURIComponent(url.pathname.slice('/api/blame/'.length));
-        try {
-          const room = await registry.open(docPath);
-          return Response.json({ path: docPath, lines: blameLines(room.doc) });
-        } catch (error) {
-          return new Response(error instanceof Error ? error.message : 'Invalid document', {
-            status: 400,
-          });
-        }
+      } catch (error) {
+        return apiError(error);
       }
 
       const cliResponse = await handleCliRoute(req, url);
@@ -111,9 +93,17 @@ export async function startServer({
           });
         case '/styles.css':
           return new Response(styles, { headers: { 'Content-Type': 'text/css; charset=utf-8' } });
-        case '/api/docs':
-          return Response.json({ docs: await vault.list() });
         default:
+          // Documents live at stable paths (/project/notes/plan.md) and bare
+          // project pages at /project: serve the app shell for both, 404 the rest.
+          if (
+            req.method === 'GET' &&
+            (/\.(md|markdown|txt)$/i.test(url.pathname) || /^\/[^/.]+\/?$/.test(url.pathname))
+          ) {
+            return new Response(indexHtml, {
+              headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+          }
           return new Response('Not found', { status: 404 });
       }
     },
@@ -122,6 +112,9 @@ export async function startServer({
         const peer: RoomSocket = {
           send(data: Uint8Array) {
             ws.send(data);
+          },
+          close() {
+            ws.close();
           },
         };
         ws.data.peer = peer;

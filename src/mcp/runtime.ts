@@ -62,20 +62,48 @@ export class AgentRuntime {
     private readonly serverWsBase: string,
     private readonly serverHttpBase: string,
     private readonly identity: AgentIdentity,
+    private readonly project: string,
   ) {}
 
   // ── document lifecycle ────────────────────────────────────────────────
 
+  /**
+   * Agent-visible paths are relative to the peer's project; the vault path
+   * (and room name) carries the project prefix. Escaping the project is
+   * rejected here, before anything reaches the server.
+   */
+  private vaultPath(path: string): string {
+    const cleaned = path.replace(/^\/+/, '');
+    if (!cleaned || cleaned.split('/').some((segment) => segment === '..' || segment === '')) {
+      throw new Error(`Invalid document path: "${path}" — use a path relative to your project.`);
+    }
+    return `${this.project}/${cleaned}`;
+  }
+
   async listDocuments(): Promise<string[]> {
-    const response = await fetch(`${this.serverHttpBase}/api/docs`);
+    const response = await fetch(
+      `${this.serverHttpBase}/api/projects/${encodeURIComponent(this.project)}/docs`,
+    );
     if (!response.ok) {
-      throw new Error(`Failed to list documents: HTTP ${response.status}`);
+      const detail =
+        response.status === 404 ? `project "${this.project}" does not exist on the server` : `HTTP ${response.status}`;
+      throw new Error(`Failed to list documents: ${detail}`);
     }
     const { docs } = (await response.json()) as { docs: string[] };
     return docs;
   }
 
   async openDocument(path: string): Promise<{ path: string; charCount: number }> {
+    const vaultPath = this.vaultPath(path);
+    const relative = this.relativePath(vaultPath);
+    // Agents only ever edit: opening cannot create a document, so fail with
+    // guidance instead of hanging on a room the server will refuse.
+    const docs = await this.listDocuments();
+    if (!docs.includes(relative)) {
+      throw new Error(
+        `Document "${relative}" does not exist in project "${this.project}". Documents are created, renamed, and deleted by humans in the web UI — call list_documents to see what exists.`,
+      );
+    }
     if (this.edit) {
       this.abortEdit();
     }
@@ -84,9 +112,14 @@ export class AgentRuntime {
     this.cursor = null;
     this.matches.clear();
 
-    this.session = await DocumentSession.open(this.serverWsBase, path, this.identity);
+    this.session = await DocumentSession.open(this.serverWsBase, vaultPath, this.identity);
     this.placeCursorAtIndex(this.text().length);
-    return { path, charCount: this.text().length };
+    return { path: this.relativePath(vaultPath), charCount: this.text().length };
+  }
+
+  /** Back from a vault path to what the agent sees. */
+  private relativePath(vaultPath: string): string {
+    return vaultPath.slice(this.project.length + 1);
   }
 
   private requireSession(): DocumentSession {
@@ -466,7 +499,7 @@ export class AgentRuntime {
   // ── lifecycle ────────────────────────────────────────────────────────
 
   get openPath(): string | null {
-    return this.session?.path ?? null;
+    return this.session ? this.relativePath(this.session.path) : null;
   }
 
   destroy(): void {

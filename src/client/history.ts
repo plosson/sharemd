@@ -4,6 +4,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import * as Y from 'yjs';
 import { yCollab } from 'y-codemirror.next';
 import { remoteEditExtension, wireEditHighlights, type EditAuthor } from './remote-edits';
+import { docApiUrl } from './api';
 import { AUTHORS_KEY, TEXT_KEY, type AuthorInfo } from '../shared/blame';
 
 /**
@@ -49,7 +50,7 @@ function decodeBase64(encoded: string): Uint8Array {
 }
 
 async function fetchLog(path: string): Promise<LogEntry[]> {
-  const response = await fetch(`/api/history/${path}`);
+  const response = await fetch(docApiUrl(path, 'history'));
   if (!response.ok) {
     throw new Error(await response.text());
   }

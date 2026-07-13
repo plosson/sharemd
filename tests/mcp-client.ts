@@ -15,6 +15,7 @@ export class AgentClient {
     serverUrl: string,
     name: string,
     launch?: { command: string; args: string[] },
+    project = 'main',
   ): Promise<AgentClient> {
     const transport = new StdioClientTransport({
       command: launch?.command ?? process.execPath,
@@ -23,6 +24,7 @@ export class AgentClient {
         ...getDefaultEnvironment(),
         MDIO_SERVER: serverUrl,
         MDIO_USERNAME: name,
+        MDIO_PROJECT: project,
       },
       stderr: 'pipe',
     });

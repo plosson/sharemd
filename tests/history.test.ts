@@ -52,16 +52,16 @@ function replayText(entries: LogEntry[], upTo = entries.length): string {
 
 describe('history log', () => {
   test('seeds on first open and records edits; replay reproduces the document', async () => {
-    const alice = await peer('demo.md');
+    const alice = await peer('main/demo.md');
     alice.text.insert(0, 'first-edit\n');
     alice.text.insert(alice.text.length, '\nsecond-edit\n');
-    const room = await server.registry.open('demo.md');
+    const room = await server.registry.open('main/demo.md');
     await waitFor(() => room.doc.getText('content').toString().includes('second-edit'), {
       label: 'server to receive edits',
     });
     await server.registry.flushAll();
 
-    const entries = await readLog('demo.md');
+    const entries = await readLog('main/demo.md');
     expect(entries.length).toBeGreaterThanOrEqual(3); // full-state seed + both edits
     for (let i = 1; i < entries.length; i++) {
       expect(entries[i]!.ts).toBeGreaterThanOrEqual(entries[i - 1]!.ts);
@@ -73,41 +73,41 @@ describe('history log', () => {
 
   test('restart reuses the log without duplicating history', async () => {
     await server.registry.flushAll();
-    const before = await readLog('demo.md');
+    const before = await readLog('main/demo.md');
     await server.stop();
 
     server = await startServer({ vaultDir, port: 0 });
-    const alice = await peer('demo.md');
+    const alice = await peer('main/demo.md');
     await server.registry.flushAll();
 
-    const after = await readLog('demo.md');
+    const after = await readLog('main/demo.md');
     expect(after.length).toBe(before.length);
     expect(replayText(after)).toBe(alice.text.toString());
   });
 
   test('offline disk edits are reconciled into the log on restart', async () => {
     await server.stop();
-    const file = join(vaultDir, 'demo.md');
+    const file = join(vaultDir, 'main/demo.md');
     const edited = `${await Bun.file(file).text()}\nedited-on-disk\n`;
     await Bun.write(file, edited);
 
     server = await startServer({ vaultDir, port: 0 });
-    const alice = await peer('demo.md');
+    const alice = await peer('main/demo.md');
     expect(alice.text.toString()).toBe(edited);
 
-    const entries = await readLog('demo.md');
+    const entries = await readLog('main/demo.md');
     expect(replayText(entries)).toBe(edited);
   });
 
   test('serves the log over HTTP as NDJSON', async () => {
-    const alice = await peer('other.md');
+    const alice = await peer('main/other.md');
     alice.text.insert(alice.text.length, 'via-http\n');
-    const room = await server.registry.open('other.md');
+    const room = await server.registry.open('main/other.md');
     await waitFor(() => room.doc.getText('content').toString().includes('via-http'), {
       label: 'server to receive edit',
     });
 
-    const response = await fetch(`${server.url}/api/history/other.md`);
+    const response = await fetch(`${server.url}/api/projects/main/docs/other.md/history`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toStartWith('application/x-ndjson');
     const entries = (await response.text())
@@ -119,19 +119,19 @@ describe('history log', () => {
       });
     expect(replayText(entries)).toBe(alice.text.toString());
 
-    const invalid = await fetch(`${server.url}/api/history/..%2Fescape.md`);
+    const invalid = await fetch(`${server.url}/api/projects/main/docs/..%2F..%2Fescape.md/history`);
     expect(invalid.status).toBe(400);
   });
 
   test('a missing sidecar restarts the log from a full-state seed', async () => {
     await server.stop();
     const { unlink } = await import('node:fs/promises');
-    await unlink(join(vaultDir, STATE_DIR, 'demo.md.yjs'));
+    await unlink(join(vaultDir, STATE_DIR, 'main/demo.md.yjs'));
 
     server = await startServer({ vaultDir, port: 0 });
-    const alice = await peer('demo.md');
+    const alice = await peer('main/demo.md');
 
-    const entries = await readLog('demo.md');
+    const entries = await readLog('main/demo.md');
     expect(entries.length).toBe(1);
     expect(replayText(entries)).toBe(alice.text.toString());
   });

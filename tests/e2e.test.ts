@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { connectPeer, startTestServer } from './helpers';
+import { apiCreateDoc, connectPeer, startTestServer, waitFor } from './helpers';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -39,8 +39,8 @@ function waitForText(selector: string, text: string, timeoutMs = 10_000) {
 test(
   'two MCP agents and a human edit the same document concurrently without losing anything',
   async () => {
-    // Human opens demo.md in the real web UI.
-    await page.goto(`${server.url}/?name=Human&doc=demo.md`);
+    // Human opens main/demo.md in the real web UI.
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
     await waitForText('.cm-content', 'Demo document');
 
     // Agents join the same document over MCP.
@@ -87,7 +87,7 @@ test(
 
     // And the merged result is persisted to the markdown file on disk.
     await server.registry.flushAll();
-    const onDisk = await Bun.file(join(vaultDir, 'demo.md')).text();
+    const onDisk = await Bun.file(join(vaultDir, 'main/demo.md')).text();
     expect(onDisk).toInclude('HUMAN: typed live from the browser');
     expect(onDisk).toInclude('ALICE: first paragraph, streamed.');
     expect(onDisk).toInclude('ALICE: second paragraph, streamed.');
@@ -102,7 +102,7 @@ test(
 test(
   'remote edits flash a transient highlight attributed to the author',
   async () => {
-    const carol = await connectPeer(server, 'demo.md');
+    const carol = await connectPeer(server, 'main/demo.md');
     try {
       carol.provider.awareness.setLocalStateField('user', {
         name: 'Carol',
@@ -150,7 +150,7 @@ test(
   async () => {
     await page.click('#history-open');
     await page.waitForSelector('#history:not([hidden])');
-    expect(await page.textContent('#history-title')).toBe('demo.md — history');
+    expect(await page.textContent('#history-title')).toBe('main/demo.md — history');
 
     // Opens at the latest entry: everything everyone wrote is there.
     await waitForText('#history-editor .cm-content', 'BOB: appended a closing line.');
@@ -355,12 +355,12 @@ test(
 );
 
 test(
-  'url hash tracks navigation and restores doc, preview, and comment focus across reload',
+  'url tracks navigation and restores doc, preview, and comment focus across reload',
   async () => {
-    // Switching documents pushes a history entry with the doc in the hash.
-    await page.click('li[data-path="other.md"]');
-    await waitForText('#doc-title', 'other.md');
-    await page.waitForFunction(() => location.hash.includes('doc=other.md'));
+    // Switching documents pushes a history entry with the doc as the path.
+    await page.click('li[data-path="main/other.md"]');
+    await waitForText('#doc-title', 'main/other.md');
+    await page.waitForFunction(() => location.pathname === '/main/other.md');
 
     // View state (preview) is reflected in the hash without new history entries.
     await page.click('#preview-toggle');
@@ -381,26 +381,26 @@ test(
     // Reload: same document, preview open, same thread focused.
     await page.reload();
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'other.md');
+    await waitForText('#doc-title', 'main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
     await page.waitForSelector('.comment-card.focused');
     expect(await page.textContent('.comment-card.focused')).toInclude('deep-linkable thread');
 
     // Back returns to the previous document (and its view state: preview off).
     await page.goBack();
-    await waitForText('#doc-title', 'demo.md');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
     await page.waitForSelector('#preview', { state: 'hidden' });
   },
   30_000,
 );
 
 test(
-  'url hash edge cases: filter state, click focus, manual edits, bad doc, stale comment, legacy param',
+  'url edge cases: filter state, click focus, direct paths, bad doc, stale comment',
   async () => {
-    // Legacy ?doc= was migrated into the hash at boot: query is clean, hash has the doc.
+    // The ?name= login shortcut was stripped at boot: query clean, doc is the path.
     expect(await page.evaluate(() => location.search)).toBe('');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
     // The resolved filter round-trips: checkbox → hash → reload.
     await page.check('#comments-show-resolved');
@@ -416,22 +416,22 @@ test(
     await page.waitForFunction(() => location.hash.includes('comment=c-'));
     await page.waitForSelector('.comment-card.focused');
 
-    // Hand-editing the hash navigates and applies view state.
-    await page.evaluate(() => {
-      location.hash = '#doc=other.md&preview=1';
-    });
-    await waitForText('#doc-title', 'other.md');
+    // A direct path URL loads that document with its view state applied.
+    await page.goto(`${server.url}/main/other.md#preview=1`);
+    await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
 
-    // An unknown document falls back to the first doc and normalizes the hash.
-    await page.goto(`${server.url}/#doc=does-not-exist.md`);
+    // An unknown document falls back to the first doc and normalizes the path.
+    await page.goto(`${server.url}/does-not-exist.md`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'demo.md');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
     // A stale comment id is ignored: page loads, nothing focused, no errors.
-    await page.goto(`${server.url}/#doc=demo.md&comment=c-deleted-long-ago`);
+    await page.goto(`${server.url}/main/demo.md#comment=c-deleted-long-ago`);
     await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'main/demo.md');
     expect(await page.locator('.comment-card.focused').count()).toBe(0);
   },
   30_000,
@@ -476,4 +476,133 @@ test(
     }
   },
   30_000,
+);
+
+test(
+  'projects: the sidebar is scoped to one project and the switcher navigates between them',
+  async () => {
+    // A second project with a document, created over the REST API.
+    await apiCreateDoc(server, 'specs/plan.md');
+
+    await page.goto(`${server.url}/specs/plan.md`);
+    await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'specs/plan.md');
+
+    // Sidebar is scoped: this project's docs (sans prefix), none of main's.
+    const selected = () =>
+      page.evaluate(() => (document.querySelector('#project-select') as HTMLSelectElement).value);
+    expect(await selected()).toBe('specs');
+    await waitForText('#doc-list', 'plan.md');
+    expect(await page.locator('li[data-path="main/demo.md"]').count()).toBe(0);
+
+    // Switching projects opens that project's first document.
+    await page.selectOption('#project-select', 'main');
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+
+    // Back crosses the project boundary and the switcher follows.
+    await page.goBack();
+    await waitForText('#doc-title', 'specs/plan.md');
+    await page.waitForFunction(() => location.pathname === '/specs/plan.md');
+    expect(await selected()).toBe('specs');
+  },
+  30_000,
+);
+
+test(
+  'humans CRUD projects and documents from the UI, with cancels and errors handled',
+  async () => {
+    type DialogHandler = (dialog: import('playwright').Dialog) => Promise<void>;
+    const queue: DialogHandler[] = [];
+    const alerts: string[] = [];
+    const onDialog = async (dialog: import('playwright').Dialog) => {
+      if (dialog.type() === 'alert') {
+        alerts.push(dialog.message());
+        await dialog.dismiss();
+        return;
+      }
+      const handler = queue.shift();
+      await (handler ? handler(dialog) : dialog.dismiss());
+    };
+    page.on('dialog', onDialog);
+    const selected = () =>
+      page.evaluate(() => (document.querySelector('#project-select') as HTMLSelectElement).value);
+    try {
+      // Starting point: the specs project from the previous test.
+      await page.goto(`${server.url}/specs/plan.md`);
+      await page.waitForSelector('.cm-content');
+
+      // Cancelling the prompt changes nothing.
+      queue.push((dialog) => dialog.dismiss());
+      await page.click('#project-new');
+      expect(await selected()).toBe('specs');
+      expect(await page.evaluate(() => location.pathname)).toBe('/specs/plan.md');
+
+      // A reserved project name is rejected and surfaced as an alert.
+      queue.push((dialog) => dialog.accept('api'));
+      await page.click('#project-new');
+      await waitFor(() => alerts.some((message) => message.includes('reserved')), {
+        label: 'reserved-name error alert',
+      });
+      expect(await selected()).toBe('specs');
+
+      // Create a project: URL becomes its page, sidebar is empty.
+      queue.push((dialog) => dialog.accept('research'));
+      await page.click('#project-new');
+      await page.waitForFunction(() => location.pathname === '/research');
+      expect(await selected()).toBe('research');
+      expect(await page.locator('#doc-list li').count()).toBe(0);
+
+      // Create a document — the .md extension is implied.
+      queue.push((dialog) => dialog.accept('ideas'));
+      await page.click('#doc-new');
+      await page.waitForFunction(() => location.pathname === '/research/ideas.md');
+      await waitForText('#doc-title', 'research/ideas.md');
+      await page.locator('.cm-content').click();
+      await page.keyboard.type('# Ideas from the UI');
+      await waitForText('.cm-content', '# Ideas from the UI');
+
+      // Rename it: URL updates, content survives.
+      queue.push((dialog) => dialog.accept('brainstorm.md'));
+      await page.click('#doc-rename');
+      await page.waitForFunction(() => location.pathname === '/research/brainstorm.md');
+      await waitForText('#doc-title', 'research/brainstorm.md');
+      await waitForText('.cm-content', '# Ideas from the UI');
+
+      // Move it to another project: everything follows.
+      queue.push((dialog) => dialog.accept('main'));
+      await page.click('#doc-move');
+      await page.waitForFunction(() => location.pathname === '/main/brainstorm.md');
+      await waitForText('#doc-title', 'main/brainstorm.md');
+      await waitForText('.cm-content', '# Ideas from the UI');
+      expect(await selected()).toBe('main');
+
+      // Delete it: the UI falls back to the project's first document.
+      queue.push((dialog) => dialog.accept());
+      await page.click('#doc-delete');
+      await page.waitForFunction(() => location.pathname === '/main/demo.md');
+      expect(await page.locator('li[data-path="main/brainstorm.md"]').count()).toBe(0);
+
+      // Rename the (now empty) research project.
+      await page.selectOption('#project-select', 'research');
+      await page.waitForFunction(() => location.pathname === '/research');
+      queue.push((dialog) => dialog.accept('lab'));
+      await page.click('#project-rename');
+      await page.waitForFunction(() => location.pathname === '/lab');
+      expect(await selected()).toBe('lab');
+
+      // Delete it: back to the first remaining project, dropdown updated.
+      queue.push((dialog) => dialog.accept());
+      await page.click('#project-delete');
+      await page.waitForFunction(() => location.pathname === '/main/demo.md');
+      const options = await page.evaluate(() =>
+        [...document.querySelectorAll('#project-select option')].map((option) => option.textContent),
+      );
+      expect(options).not.toContain('lab');
+      expect(options).not.toContain('research');
+    } finally {
+      page.off('dialog', onDialog);
+    }
+  },
+  60_000,
 );

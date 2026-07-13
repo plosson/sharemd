@@ -1,9 +1,11 @@
 import { join } from 'node:path';
-import { parseUsername } from '../mcp/identity';
+import { parseUsername, resolveProject } from '../mcp/identity';
 
 export interface McpInstallOptions {
   server: string;
   username: string;
+  /** Vault project this peer is scoped to. */
+  project: string;
   /** Command written into .mcp.json; defaults to the bare binary name. */
   command?: string;
   cwd?: string;
@@ -33,6 +35,7 @@ interface McpJson {
  */
 export async function installMcpConfig(options: McpInstallOptions): Promise<McpInstallResult> {
   parseUsername(options.username); // same validation the MCP applies at startup
+  resolveProject({ MDIO_PROJECT: options.project });
   const server = options.server.replace(/\/+$/, '');
   if (!/^(https?|wss?):\/\//.test(server)) {
     throw new Error(`--server must be an http(s) or ws(s) URL, got "${options.server}"`);
@@ -64,6 +67,7 @@ export async function installMcpConfig(options: McpInstallOptions): Promise<McpI
       ...previousEnv,
       MDIO_SERVER: server,
       MDIO_USERNAME: options.username,
+      MDIO_PROJECT: options.project,
     },
   };
   servers.mdio = { ...previous, ...entry };

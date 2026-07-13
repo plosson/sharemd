@@ -74,6 +74,7 @@ describe('mcp install', () => {
     const result = await installMcpConfig({
       server: 'http://localhost:9999/',
       username: 'plosson/claude',
+      project: 'main',
       cwd,
     });
     expect(result.action).toBe('created');
@@ -81,7 +82,7 @@ describe('mcp install', () => {
     expect(config.mcpServers.mdio).toEqual({
       command: 'mdio',
       args: ['mcp'],
-      env: { MDIO_SERVER: 'http://localhost:9999', MDIO_USERNAME: 'plosson/claude' },
+      env: { MDIO_SERVER: 'http://localhost:9999', MDIO_USERNAME: 'plosson/claude', MDIO_PROJECT: 'main' },
     });
   });
 
@@ -97,7 +98,7 @@ describe('mcp install', () => {
         },
       }),
     );
-    const result = await installMcpConfig({ server: 'ws://md.example.com', username: 'plosson', cwd });
+    const result = await installMcpConfig({ server: 'ws://md.example.com', username: 'plosson', project: 'specs', cwd });
     expect(result.action).toBe('updated');
     const config = JSON.parse(await Bun.file(result.path).text());
     expect(config.someTopLevel).toBe(true);
@@ -109,20 +110,22 @@ describe('mcp install', () => {
       MDIO_AGENT_COLOR: '#123456',
       MDIO_SERVER: 'ws://md.example.com',
       MDIO_USERNAME: 'plosson',
+      MDIO_PROJECT: 'specs',
     });
     expect(await readMcpConfig(cwd)).toEqual(config.mcpServers.mdio.env);
   });
 
   test('rejects invalid usernames and non-URL servers', async () => {
     const cwd = join(tmp, 'mcp-invalid');
-    expect(installMcpConfig({ server: 'http://x', username: 'a/b/c', cwd })).rejects.toThrow('at most one');
-    expect(installMcpConfig({ server: 'not-a-url', username: 'plosson', cwd })).rejects.toThrow('http(s)');
+    expect(installMcpConfig({ server: 'http://x', username: 'a/b/c', project: 'main', cwd })).rejects.toThrow('at most one');
+    expect(installMcpConfig({ server: 'not-a-url', username: 'plosson', project: 'main', cwd })).rejects.toThrow('http(s)');
+    expect(installMcpConfig({ server: 'http://x', username: 'plosson', project: 'a/b', cwd })).rejects.toThrow('plain project name');
   });
 
   test('refuses to overwrite an unparseable .mcp.json', async () => {
     const cwd = join(tmp, 'mcp-broken');
     await Bun.write(join(cwd, '.mcp.json'), '{ not json');
-    expect(installMcpConfig({ server: 'http://x', username: 'plosson', cwd })).rejects.toThrow('not valid JSON');
+    expect(installMcpConfig({ server: 'http://x', username: 'plosson', project: 'main', cwd })).rejects.toThrow('not valid JSON');
   });
 });
 
@@ -318,7 +321,7 @@ describe('compiled binary end-to-end', () => {
         expect(tools).toContain('begin_edit');
 
         const { docs } = await agent.call<{ docs: string[] }>('list_documents');
-        expect(docs).toContain('demo.md');
+        expect(docs).toContain('demo.md'); // project-relative: the peer is scoped to "main"
 
         await agent.call('open_document', { path: 'demo.md' });
         await agent.call('replace_text', { query: 'First note', replacement: 'First note (via binary)' });

@@ -8,7 +8,8 @@
       ],
       "env": {
         "MDIO_SERVER": "http://localhost:4321",
-        "MDIO_USERNAME": "plosson/claude"
+        "MDIO_USERNAME": "plosson/claude",
+        "MDIO_PROJECT": "main"
       }
     }
   }

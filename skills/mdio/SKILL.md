@@ -10,6 +10,12 @@ named peer: humans in a browser see your name, cursor, and edits in real time �
 may be editing at the same time. Edits merge automatically; there are no locks and no
 conflicts, so never wait for or ask permission before editing.
 
+You are scoped to **one project** of the vault (set by `MDIO_PROJECT` in the MCP config).
+All document paths are relative to that project; documents in other projects are not
+visible and cannot be opened. You cannot create, rename, or delete documents — that is
+deliberately reserved to humans (web UI). If a document you need doesn't exist, say so
+and ask a collaborator to create it; `list_documents` shows what exists.
+
 ## The one hard rule
 
 **Never touch vault files on disk.** If a document lives in an mdio vault, do not use
@@ -81,5 +87,6 @@ understand what the comment referred to.
 - `replace_text` failing on 0 or >1 occurrences is a feature: disambiguate by extending
   the query, never by shortening it.
 - "Match no longer exists" means someone edited that text away — re-read before retrying.
-- Your identity (name, `owner/agent` role) comes from the MCP server config env, not
-  from tool arguments; you cannot act as someone else.
+- Your identity (name, `owner/agent` role) and project scope come from the MCP server
+  config env, not from tool arguments; you cannot act as someone else or reach outside
+  your project.

@@ -10,7 +10,14 @@
     <div id="app">
       <aside id="sidebar">
         <h1>mdio</h1>
+        <div id="project-bar">
+          <select id="project-select" title="Switch project"></select>
+          <button id="project-new" type="button" title="New project">＋</button>
+          <button id="project-rename" type="button" title="Rename this project">✎</button>
+          <button id="project-delete" type="button" title="Delete this project and all its documents">🗑</button>
+        </div>
         <ul id="doc-list"></ul>
+        <button id="doc-new" type="button" title="Create a document in this project">＋ new document</button>
         <div id="me" hidden>
           <span id="me-name" class="peer"></span>
           <button id="logout" type="button" title="Forget this name on this browser">log out</button>
@@ -24,6 +31,9 @@
           <button id="comment-add" type="button" title="Comment on the selected text">＋ comment</button>
           <button id="preview-toggle" type="button" title="Toggle rendered markdown preview">preview</button>
           <button id="history-open" type="button" title="Replay this document's edit history">history</button>
+          <button id="doc-rename" type="button" title="Rename this document">rename</button>
+          <button id="doc-move" type="button" title="Move this document to another project">move</button>
+          <button id="doc-delete" type="button" title="Delete this document">delete</button>
         </header>
         <div id="workspace">
           <div id="editor"></div>

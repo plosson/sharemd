@@ -36,6 +36,23 @@ export function parseUsername(raw: string): ParsedUsername {
     : { name, owner: null, role: 'human' };
 }
 
+/**
+ * The project this MCP peer is scoped to. Like identity, it comes from the MCP
+ * config env, not tool arguments — the peer sees nothing outside its project.
+ */
+export function resolveProject(env: Record<string, string | undefined>): string {
+  const project = env.MDIO_PROJECT?.trim();
+  if (!project) {
+    throw new Error(
+      'MDIO_PROJECT is required — an MCP peer is scoped to one project of the vault, e.g. MDIO_PROJECT=main.',
+    );
+  }
+  if (project.includes('/') || /\s/.test(project) || project.startsWith('.')) {
+    throw new Error(`MDIO_PROJECT must be a plain project name (no "/", spaces, or leading dot): "${project}"`);
+  }
+  return project;
+}
+
 export function resolveIdentity(env: Record<string, string | undefined>): AgentIdentity {
   const raw = env.MDIO_USERNAME;
   if (!raw) {
