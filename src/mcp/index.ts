@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AgentRuntime } from './runtime';
 import { resolveIdentity } from './identity';
 import type { AgentIdentity } from './session';
+import pkg from '../../package.json';
 
 function identityFromEnv(): AgentIdentity {
   try {
@@ -14,18 +15,15 @@ function identityFromEnv(): AgentIdentity {
   }
 }
 
-function resolveServerUrls(): { wsBase: string; httpBase: string } {
-  const raw = (process.env.SHAREMD_SERVER || 'http://localhost:4321').replace(/\/+$/, '');
+export function resolveServerUrls(env: Record<string, string | undefined> = process.env): {
+  wsBase: string;
+  httpBase: string;
+} {
+  const raw = (env.SHAREMD_SERVER || 'http://localhost:4321').replace(/\/+$/, '');
   const httpBase = raw.replace(/^ws(s?):\/\//, 'http$1://');
   const wsBase = `${httpBase.replace(/^http(s?):\/\//, 'ws$1://')}/ws`;
   return { wsBase, httpBase };
 }
-
-const identity = identityFromEnv();
-const { wsBase, httpBase } = resolveServerUrls();
-const runtime = new AgentRuntime(wsBase, httpBase, identity);
-
-const server = new McpServer({ name: 'sharemd', version: '0.1.0' });
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 
@@ -41,219 +39,232 @@ function respond(fn: () => unknown | Promise<unknown>): Promise<ToolResult> {
     }));
 }
 
-server.registerTool(
-  'list_documents',
-  { description: 'List the markdown documents available in the shared workspace.' },
-  () => respond(async () => ({ docs: await runtime.listDocuments() })),
-);
+/** Run the stdio MCP server until the transport closes (the process' whole life). */
+export async function runMcp(): Promise<void> {
+  const identity = identityFromEnv();
+  const { wsBase, httpBase } = resolveServerUrls();
+  const runtime = new AgentRuntime(wsBase, httpBase, identity);
 
-server.registerTool(
-  'open_document',
-  {
-    description:
-      'Open a document by path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document.',
-    inputSchema: { path: z.string().min(1) },
-  },
-  ({ path }) => respond(() => runtime.openDocument(path)),
-);
+  const server = new McpServer({ name: 'sharemd', version: pkg.version });
 
-server.registerTool(
-  'read_document',
-  {
-    description:
-      'Read the current live text of the open document (a window of up to maxChars). The document may change between calls as others edit, so re-read before deciding where to edit.',
-    inputSchema: {
-      startChar: z.number().int().min(0).optional(),
-      maxChars: z.number().int().min(100).max(20000).optional(),
+  server.registerTool(
+    'list_documents',
+    { description: 'List the markdown documents available in the shared workspace.' },
+    () => respond(async () => ({ docs: await runtime.listDocuments() })),
+  );
+
+  server.registerTool(
+    'open_document',
+    {
+      description:
+        'Open a document by path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document.',
+      inputSchema: { path: z.string().min(1) },
     },
-  },
-  ({ startChar, maxChars }) => respond(() => runtime.readDocument(startChar ?? 0, maxChars ?? 6000)),
-);
+    ({ path }) => respond(() => runtime.openDocument(path)),
+  );
 
-server.registerTool(
-  'search_text',
-  {
-    description:
-      'Find exact text in the open document — whitespace and newlines match literally, so trailing/blank-line text is anchorable. Returns stable match handles (matchIds) that stay anchored to the found text even while others edit concurrently. Use handles with place_cursor, replace_match, and delete_range.',
-    inputSchema: {
-      query: z.string().min(1),
-      maxResults: z.number().int().min(1).max(20).optional(),
+  server.registerTool(
+    'read_document',
+    {
+      description:
+        'Read the current live text of the open document (a window of up to maxChars). The document may change between calls as others edit, so re-read before deciding where to edit.',
+      inputSchema: {
+        startChar: z.number().int().min(0).optional(),
+        maxChars: z.number().int().min(100).max(20000).optional(),
+      },
     },
-  },
-  ({ query, maxResults }) => respond(() => ({ matches: runtime.searchText(query, maxResults ?? 8) })),
-);
+    ({ startChar, maxChars }) => respond(() => runtime.readDocument(startChar ?? 0, maxChars ?? 6000)),
+  );
 
-server.registerTool(
-  'blame_document',
-  {
-    description:
-      'Per-line authorship of the open document, git-blame style: each line lists every author who wrote surviving characters on it (with char counts). Authorship comes from the CRDT itself, so it survives concurrent edits.',
-    inputSchema: {
-      startLine: z.number().int().min(1).optional(),
-      maxLines: z.number().int().min(1).max(1000).optional(),
+  server.registerTool(
+    'search_text',
+    {
+      description:
+        'Find exact text in the open document — whitespace and newlines match literally, so trailing/blank-line text is anchorable. Returns stable match handles (matchIds) that stay anchored to the found text even while others edit concurrently. Use handles with place_cursor, replace_match, and delete_range.',
+      inputSchema: {
+        query: z.string().min(1),
+        maxResults: z.number().int().min(1).max(20).optional(),
+      },
     },
-  },
-  ({ startLine, maxLines }) => respond(() => runtime.blameDocument(startLine ?? 1, maxLines ?? 200)),
-);
+    ({ query, maxResults }) => respond(() => ({ matches: runtime.searchText(query, maxResults ?? 8) })),
+  );
 
-server.registerTool(
-  'place_cursor',
-  {
-    description:
-      'Place your visible cursor at the start or end of a match (matchId + edge), or at the document boundary (boundary: "start" | "end"). Subsequent insert_text and begin_edit(mode: "insert") happen at the cursor.',
-    inputSchema: {
-      matchId: z.string().optional(),
-      edge: z.enum(['start', 'end']).optional(),
-      boundary: z.enum(['start', 'end']).optional(),
+  server.registerTool(
+    'blame_document',
+    {
+      description:
+        'Per-line authorship of the open document, git-blame style: each line lists every author who wrote surviving characters on it (with char counts). Authorship comes from the CRDT itself, so it survives concurrent edits.',
+      inputSchema: {
+        startLine: z.number().int().min(1).optional(),
+        maxLines: z.number().int().min(1).max(1000).optional(),
+      },
     },
-  },
-  (input) => respond(() => runtime.placeCursor(input)),
-);
+    ({ startLine, maxLines }) => respond(() => runtime.blameDocument(startLine ?? 1, maxLines ?? 200)),
+  );
 
-server.registerTool(
-  'insert_text',
-  {
-    description:
-      'Insert text at the current cursor as one atomic edit. Good for short, single-shot insertions. For writing longer content progressively, prefer begin_edit + append_text + commit_edit.',
-    inputSchema: { text: z.string().min(1) },
-  },
-  ({ text }) => respond(() => runtime.insertText(text)),
-);
-
-server.registerTool(
-  'replace_match',
-  {
-    description: 'Replace the exact text of a previously found match with new text.',
-    inputSchema: { matchId: z.string().min(1), text: z.string() },
-  },
-  ({ matchId, text }) => respond(() => runtime.replaceMatch(matchId, text)),
-);
-
-server.registerTool(
-  'replace_text',
-  {
-    description:
-      'Find exact text and replace it in one call — no round-trip between search and replace, so nothing can move in between. The text must occur exactly once; if it is missing or ambiguous this fails and search_text + replace_match gives finer control. Whitespace and newlines match literally.',
-    inputSchema: { query: z.string().min(1), replacement: z.string() },
-  },
-  ({ query, replacement }) => respond(() => runtime.replaceText(query, replacement)),
-);
-
-server.registerTool(
-  'delete_range',
-  {
-    description:
-      'Delete everything from the start of one match to the end of another (inclusive of both matches). Use search_text first to anchor both ends.',
-    inputSchema: { startMatchId: z.string().min(1), endMatchId: z.string().min(1) },
-  },
-  ({ startMatchId, endMatchId }) => respond(() => runtime.deleteRange(startMatchId, endMatchId)),
-);
-
-server.registerTool(
-  'add_comment',
-  {
-    description:
-      'Attach a comment thread to a text range, anchored via a search_text match handle. The anchor follows the text under concurrent edits; if the text is later deleted the thread survives as "orphaned" with its original quote. Mention peers with @name or @owner/agent in the body.',
-    inputSchema: { matchId: z.string().min(1), body: z.string().min(1) },
-  },
-  ({ matchId, body }) => respond(() => runtime.addComment(matchId, body)),
-);
-
-server.registerTool(
-  'list_comments',
-  {
-    description:
-      'List comment threads on the open document (root + replies, resolved state, quoted and current anchored text). Filter with includeResolved:false or mentioning:"name" (e.g. your own username to find comments addressed to you).',
-    inputSchema: {
-      includeResolved: z.boolean().optional(),
-      mentioning: z.string().optional(),
+  server.registerTool(
+    'place_cursor',
+    {
+      description:
+        'Place your visible cursor at the start or end of a match (matchId + edge), or at the document boundary (boundary: "start" | "end"). Subsequent insert_text and begin_edit(mode: "insert") happen at the cursor.',
+      inputSchema: {
+        matchId: z.string().optional(),
+        edge: z.enum(['start', 'end']).optional(),
+        boundary: z.enum(['start', 'end']).optional(),
+      },
     },
-  },
-  (input) => respond(() => runtime.listComments(input)),
-);
+    (input) => respond(() => runtime.placeCursor(input)),
+  );
 
-server.registerTool(
-  'reply_comment',
-  {
-    description: 'Reply to a comment thread (commentId must be the thread root).',
-    inputSchema: { commentId: z.string().min(1), body: z.string().min(1) },
-  },
-  ({ commentId, body }) => respond(() => runtime.replyComment(commentId, body)),
-);
+  server.registerTool(
+    'insert_text',
+    {
+      description:
+        'Insert text at the current cursor as one atomic edit. Good for short, single-shot insertions. For writing longer content progressively, prefer begin_edit + append_text + commit_edit.',
+      inputSchema: { text: z.string().min(1) },
+    },
+    ({ text }) => respond(() => runtime.insertText(text)),
+  );
 
-server.registerTool(
-  'edit_comment',
-  {
-    description: 'Edit the body of a comment you authored.',
-    inputSchema: { commentId: z.string().min(1), body: z.string().min(1) },
-  },
-  ({ commentId, body }) => respond(() => runtime.editComment(commentId, body)),
-);
+  server.registerTool(
+    'replace_match',
+    {
+      description: 'Replace the exact text of a previously found match with new text.',
+      inputSchema: { matchId: z.string().min(1), text: z.string() },
+    },
+    ({ matchId, text }) => respond(() => runtime.replaceMatch(matchId, text)),
+  );
 
-server.registerTool(
-  'resolve_comment',
-  {
-    description:
-      'Resolve a comment thread (or reopen it with resolved:false). Anyone can resolve; commentId must be the thread root.',
-    inputSchema: { commentId: z.string().min(1), resolved: z.boolean().optional() },
-  },
-  ({ commentId, resolved }) => respond(() => runtime.resolveComment(commentId, resolved ?? true)),
-);
+  server.registerTool(
+    'replace_text',
+    {
+      description:
+        'Find exact text and replace it in one call — no round-trip between search and replace, so nothing can move in between. The text must occur exactly once; if it is missing or ambiguous this fails and search_text + replace_match gives finer control. Whitespace and newlines match literally.',
+      inputSchema: { query: z.string().min(1), replacement: z.string() },
+    },
+    ({ query, replacement }) => respond(() => runtime.replaceText(query, replacement)),
+  );
 
-server.registerTool(
-  'delete_comment',
-  {
-    description: 'Delete a comment you authored. Deleting a thread root deletes its replies too.',
-    inputSchema: { commentId: z.string().min(1) },
-  },
-  ({ commentId }) => respond(() => runtime.deleteComment(commentId)),
-);
+  server.registerTool(
+    'delete_range',
+    {
+      description:
+        'Delete everything from the start of one match to the end of another (inclusive of both matches). Use search_text first to anchor both ends.',
+      inputSchema: { startMatchId: z.string().min(1), endMatchId: z.string().min(1) },
+    },
+    ({ startMatchId, endMatchId }) => respond(() => runtime.deleteRange(startMatchId, endMatchId)),
+  );
 
-server.registerTool(
-  'begin_edit',
-  {
-    description:
-      'Start a stepwise edit session: mode "insert" writes at the current cursor, mode "append" writes at the end of the document. Then call append_text one or more times (a paragraph or two per call, so humans see you writing progressively), and finish with commit_edit — or abort_edit to revert everything written in the session.',
-    inputSchema: { mode: z.enum(['insert', 'append']) },
-  },
-  ({ mode }) => respond(() => runtime.beginEdit(mode)),
-);
+  server.registerTool(
+    'add_comment',
+    {
+      description:
+        'Attach a comment thread to a text range, anchored via a search_text match handle. The anchor follows the text under concurrent edits; if the text is later deleted the thread survives as "orphaned" with its original quote. Mention peers with @name or @owner/agent in the body.',
+      inputSchema: { matchId: z.string().min(1), body: z.string().min(1) },
+    },
+    ({ matchId, body }) => respond(() => runtime.addComment(matchId, body)),
+  );
 
-server.registerTool(
-  'append_text',
-  {
-    description:
-      'Append the next chunk of text to the active edit session. Keep chunks small (a paragraph or two) and call repeatedly — collaborators watch your progress live.',
-    inputSchema: { text: z.string() },
-  },
-  ({ text }) => respond(() => runtime.appendText(text)),
-);
+  server.registerTool(
+    'list_comments',
+    {
+      description:
+        'List comment threads on the open document (root + replies, resolved state, quoted and current anchored text). Filter with includeResolved:false or mentioning:"name" (e.g. your own username to find comments addressed to you).',
+      inputSchema: {
+        includeResolved: z.boolean().optional(),
+        mentioning: z.string().optional(),
+      },
+    },
+    (input) => respond(() => runtime.listComments(input)),
+  );
 
-server.registerTool(
-  'commit_edit',
-  { description: 'Finish the active edit session, keeping everything written.' },
-  () => respond(() => runtime.commitEdit()),
-);
+  server.registerTool(
+    'reply_comment',
+    {
+      description: 'Reply to a comment thread (commentId must be the thread root).',
+      inputSchema: { commentId: z.string().min(1), body: z.string().min(1) },
+    },
+    ({ commentId, body }) => respond(() => runtime.replyComment(commentId, body)),
+  );
 
-server.registerTool(
-  'abort_edit',
-  { description: 'Cancel the active edit session and revert the text it wrote.' },
-  () => respond(() => runtime.abortEdit()),
-);
+  server.registerTool(
+    'edit_comment',
+    {
+      description: 'Edit the body of a comment you authored.',
+      inputSchema: { commentId: z.string().min(1), body: z.string().min(1) },
+    },
+    ({ commentId, body }) => respond(() => runtime.editComment(commentId, body)),
+  );
 
-process.on('SIGINT', () => {
-  runtime.destroy();
-  process.exit(0);
-});
-process.on('SIGTERM', () => {
-  runtime.destroy();
-  process.exit(0);
-});
+  server.registerTool(
+    'resolve_comment',
+    {
+      description:
+        'Resolve a comment thread (or reopen it with resolved:false). Anyone can resolve; commentId must be the thread root.',
+      inputSchema: { commentId: z.string().min(1), resolved: z.boolean().optional() },
+    },
+    ({ commentId, resolved }) => respond(() => runtime.resolveComment(commentId, resolved ?? true)),
+  );
 
-const transport = new StdioServerTransport();
-transport.onclose = () => {
-  runtime.destroy();
-  process.exit(0);
-};
-await server.connect(transport);
-console.error(`sharemd MCP ready — agent "${identity.name}" targeting ${httpBase}`);
+  server.registerTool(
+    'delete_comment',
+    {
+      description: 'Delete a comment you authored. Deleting a thread root deletes its replies too.',
+      inputSchema: { commentId: z.string().min(1) },
+    },
+    ({ commentId }) => respond(() => runtime.deleteComment(commentId)),
+  );
+
+  server.registerTool(
+    'begin_edit',
+    {
+      description:
+        'Start a stepwise edit session: mode "insert" writes at the current cursor, mode "append" writes at the end of the document. Then call append_text one or more times (a paragraph or two per call, so humans see you writing progressively), and finish with commit_edit — or abort_edit to revert everything written in the session.',
+      inputSchema: { mode: z.enum(['insert', 'append']) },
+    },
+    ({ mode }) => respond(() => runtime.beginEdit(mode)),
+  );
+
+  server.registerTool(
+    'append_text',
+    {
+      description:
+        'Append the next chunk of text to the active edit session. Keep chunks small (a paragraph or two) and call repeatedly — collaborators watch your progress live.',
+      inputSchema: { text: z.string() },
+    },
+    ({ text }) => respond(() => runtime.appendText(text)),
+  );
+
+  server.registerTool(
+    'commit_edit',
+    { description: 'Finish the active edit session, keeping everything written.' },
+    () => respond(() => runtime.commitEdit()),
+  );
+
+  server.registerTool(
+    'abort_edit',
+    { description: 'Cancel the active edit session and revert the text it wrote.' },
+    () => respond(() => runtime.abortEdit()),
+  );
+
+  process.on('SIGINT', () => {
+    runtime.destroy();
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    runtime.destroy();
+    process.exit(0);
+  });
+
+  const transport = new StdioServerTransport();
+  transport.onclose = () => {
+    runtime.destroy();
+    process.exit(0);
+  };
+  await server.connect(transport);
+  console.error(`sharemd MCP ready — agent "${identity.name}" targeting ${httpBase}`);
+}
+
+if (import.meta.main) {
+  await runMcp();
+}

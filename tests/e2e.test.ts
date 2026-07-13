@@ -54,7 +54,9 @@ test(
     // All three edit at the same time.
     const humanEdits = (async () => {
       await page.locator('.cm-content').click();
-      await page.keyboard.press('ControlOrMeta+ArrowUp'); // jump to document start
+      // Jump to document start: Cmd+Up on macOS, Ctrl+Home elsewhere (Ctrl+Up is
+      // not a doc-start motion on Linux — the human would type inside Alice's stream).
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
       await page.keyboard.type('HUMAN: typed live from the browser\n', { delay: 15 });
     })();
 

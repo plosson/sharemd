@@ -11,10 +11,14 @@ export class AgentClient {
     private readonly client: Client,
   ) {}
 
-  static async spawn(serverUrl: string, name: string): Promise<AgentClient> {
+  static async spawn(
+    serverUrl: string,
+    name: string,
+    launch?: { command: string; args: string[] },
+  ): Promise<AgentClient> {
     const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ['run', join(PROJECT_ROOT, 'src', 'mcp', 'index.ts')],
+      command: launch?.command ?? process.execPath,
+      args: launch?.args ?? ['run', join(PROJECT_ROOT, 'src', 'mcp', 'index.ts')],
       env: {
         ...getDefaultEnvironment(),
         SHAREMD_SERVER: serverUrl,

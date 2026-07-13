@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import { Room, RoomRegistry, type RoomSocket } from './rooms';
 import { Vault } from './vault';
+import { handleCliRoute } from './cli-routes';
 import { blameLines } from '../shared/blame';
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'client');
@@ -94,6 +95,11 @@ export async function startServer({
             status: 400,
           });
         }
+      }
+
+      const cliResponse = await handleCliRoute(req, url);
+      if (cliResponse) {
+        return cliResponse;
       }
 
       switch (url.pathname) {
