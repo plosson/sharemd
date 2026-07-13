@@ -1,4 +1,4 @@
-import { existsSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { appendFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 
@@ -8,6 +8,22 @@ const EDITABLE_EXTENSIONS = ['.md', '.markdown', '.txt'];
 export const STATE_DIR = '.mdio';
 /** Pre-rename sidecar directory, migrated to STATE_DIR on first open. */
 const LEGACY_STATE_DIR = '.sharemd';
+
+/** Project pre-projects vaults' root documents migrate into. */
+export const DEFAULT_PROJECT = 'main';
+
+/** Route names the web server claims — a project cannot shadow them. */
+const RESERVED_PROJECT_NAMES = new Set(['api', 'ws', 'app.js', 'styles.css', 'install.sh', 'install.ps1']);
+
+/** Validate a project name (a single top-level directory segment). */
+export function assertProjectName(name: string): void {
+  if (!name || /[/\\]/.test(name) || /\s/.test(name)) {
+    throw new Error(`Invalid project name: "${name}" — one directory name, no slashes or spaces.`);
+  }
+  if (name.startsWith('.') || RESERVED_PROJECT_NAMES.has(name.toLowerCase())) {
+    throw new Error(`"${name}" is a reserved name — pick another project name.`);
+  }
+}
 
 export class Vault {
   readonly root: string;
@@ -20,6 +36,36 @@ export class Vault {
     if (existsSync(legacy) && !existsSync(join(this.root, STATE_DIR))) {
       renameSync(legacy, join(this.root, STATE_DIR));
     }
+    this.migrateRootDocs();
+  }
+
+  /**
+   * One-shot migration: pre-projects vaults kept documents at the root; move
+   * them (and their sidecars) into the default project. Root subdirectories
+   * already are projects and stay untouched.
+   */
+  private migrateRootDocs(): void {
+    if (!existsSync(this.root)) {
+      return;
+    }
+    const rootDocs = readdirSync(this.root, { withFileTypes: true }).filter(
+      (entry) =>
+        entry.isFile() && EDITABLE_EXTENSIONS.some((ext) => entry.name.toLowerCase().endsWith(ext)),
+    );
+    if (rootDocs.length === 0) {
+      return;
+    }
+    mkdirSync(join(this.root, DEFAULT_PROJECT), { recursive: true });
+    for (const entry of rootDocs) {
+      renameSync(join(this.root, entry.name), join(this.root, DEFAULT_PROJECT, entry.name));
+      for (const suffix of ['.yjs', '.log']) {
+        const sidecar = join(this.root, STATE_DIR, `${entry.name}${suffix}`);
+        if (existsSync(sidecar)) {
+          mkdirSync(join(this.root, STATE_DIR, DEFAULT_PROJECT), { recursive: true });
+          renameSync(sidecar, join(this.root, STATE_DIR, DEFAULT_PROJECT, `${entry.name}${suffix}`));
+        }
+      }
+    }
   }
 
   /** Resolve a vault-relative document path, rejecting traversal and non-text files. */
@@ -30,6 +76,13 @@ export class Vault {
     }
     if (cleaned === STATE_DIR || cleaned.startsWith(`${STATE_DIR}${sep}`)) {
       throw new Error(`Invalid document path: ${docPath}`);
+    }
+    const project = cleaned.split(sep)[0]!;
+    if (!cleaned.includes(sep)) {
+      throw new Error(`Documents live inside a project: ${docPath} (expected <project>/<doc>)`);
+    }
+    if (project.startsWith('.') || RESERVED_PROJECT_NAMES.has(project.toLowerCase())) {
+      throw new Error(`"${project}" is a reserved name — pick another project name.`);
     }
     if (!EDITABLE_EXTENSIONS.some((ext) => cleaned.toLowerCase().endsWith(ext))) {
       throw new Error(`Unsupported document type: ${docPath}`);
@@ -99,24 +152,40 @@ export class Vault {
     await Bun.write(this.logFile(docPath), line);
   }
 
-  async list(): Promise<string[]> {
+  async list(project?: string): Promise<string[]> {
     const entries = await readdir(this.root, { recursive: true, withFileTypes: true });
     const docs: string[] = [];
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
       }
-      if (!EDITABLE_EXTENSIONS.some((ext) => entry.name.toLowerCase().endsWith(ext))) {
-        continue;
-      }
       const parent = resolve(entry.parentPath ?? this.root);
       const absolute = join(parent, entry.name);
       const relative = absolute.slice(this.root.length + 1).split(sep).join('/');
-      if (relative === STATE_DIR || relative.startsWith(`${STATE_DIR}/`)) {
+      try {
+        this.resolvePath(relative); // skips sidecars, root strays, reserved names
+      } catch {
+        continue;
+      }
+      if (project !== undefined && !relative.startsWith(`${project}/`)) {
         continue;
       }
       docs.push(relative);
     }
     return docs.sort();
+  }
+
+  /** Top-level directories are projects; every document lives inside one. */
+  async listProjects(): Promise<string[]> {
+    const entries = await readdir(this.root, { withFileTypes: true });
+    return entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          !entry.name.startsWith('.') &&
+          !RESERVED_PROJECT_NAMES.has(entry.name.toLowerCase()),
+      )
+      .map((entry) => entry.name)
+      .sort();
   }
 }

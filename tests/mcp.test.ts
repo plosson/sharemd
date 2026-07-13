@@ -13,7 +13,7 @@ let observer: TestPeer;
 beforeAll(async () => {
   ({ server, vaultDir } = await startTestServer());
   agent = await AgentClient.spawn(server.url, 'plosson/alice');
-  observer = await connectPeer(server, 'demo.md');
+  observer = await connectPeer(server, 'main/demo.md');
 });
 
 afterAll(async () => {
@@ -67,9 +67,22 @@ describe('mdio MCP', () => {
     ]);
   });
 
-  test('list_documents returns the vault', async () => {
-    const { docs } = await agent.call<{ docs: string[] }>('list_documents');
+  test('list_documents returns the project, with project-relative paths', async () => {
+    const { project, docs } = await agent.call<{ project: string; docs: string[] }>('list_documents');
+    expect(project).toBe('main');
     expect(docs).toEqual(['demo.md', 'other.md']);
+  });
+
+  test('the peer is fenced into its project: no other project is visible or reachable', async () => {
+    const stranger = await connectPeer(server, 'secret/hidden.md');
+    stranger.text.insert(0, '# Hidden\n');
+    await server.registry.flushAll();
+    stranger.destroy();
+
+    const { docs } = await agent.call<{ docs: string[] }>('list_documents');
+    expect(docs).not.toContain('secret/hidden.md');
+    const escape = await agent.callExpectingError('open_document', { path: '../secret/hidden.md' });
+    expect(escape).toInclude('relative to your project');
   });
 
   test('tools before open_document fail with guidance', async () => {
@@ -387,7 +400,7 @@ describe('mdio MCP', () => {
 
   test('edits persist to the file on disk', async () => {
     await server.registry.flushAll();
-    const onDisk = await Bun.file(join(vaultDir, 'demo.md')).text();
+    const onDisk = await Bun.file(join(vaultDir, 'main/demo.md')).text();
     expect(onDisk).toInclude('Third note (still anchored)');
     expect(onDisk).toInclude('Paragraph two.');
     expect(onDisk).not.toInclude('DRAFT THAT WILL BE ABORTED');

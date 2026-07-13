@@ -17,8 +17,8 @@ Shared between humans and agents.
 
 export async function startTestServer(): Promise<{ server: MdioServer; vaultDir: string }> {
   const vaultDir = await mkdtemp(join(tmpdir(), 'mdio-test-'));
-  await Bun.write(join(vaultDir, 'demo.md'), DEMO_CONTENT);
-  await Bun.write(join(vaultDir, 'other.md'), '# Other\n');
+  await Bun.write(join(vaultDir, 'main', 'demo.md'), DEMO_CONTENT);
+  await Bun.write(join(vaultDir, 'main', 'other.md'), '# Other\n');
   const server = await startServer({ vaultDir, port: 0 });
   return { server, vaultDir };
 }

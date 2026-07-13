@@ -168,7 +168,7 @@ describe('blameLines (unit)', () => {
 describe('blame over HTTP', () => {
   test('a freshly hydrated file is blamed entirely to "disk"', async () => {
     const { server } = await freshServer();
-    const lines = await fetchBlame(server, 'demo.md');
+    const lines = await fetchBlame(server, 'main/demo.md');
     expect(lines).toHaveLength(DEMO_LINES);
     for (const line of lines) {
       expect(line.authors).toHaveLength(1);
@@ -181,18 +181,18 @@ describe('blame over HTTP', () => {
 
   test('a peer edit inside an existing line yields a two-author line', async () => {
     const { server } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert('# Demo'.length, ' EDITED');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().includes('# Demo EDITED'), { label: 'server to see edit' });
 
-    const lines = await fetchBlame(server, 'demo.md');
+    const lines = await fetchBlame(server, 'main/demo.md');
     expect(authorsOf(lines[0]!)).toEqual({ disk: '# Demo document\n'.length, Alice: ' EDITED'.length });
   });
 
   test('rejects traversal, sidecar-dir, and non-text paths', async () => {
     const { server } = await freshServer();
-    for (const bad of ['..%2Fsecret.md', `${STATE_DIR}%2Fdemo.md`, `${STATE_DIR}%2Fdemo.md.yjs`, 'app.exe']) {
+    for (const bad of ['..%2Fsecret.md', `${STATE_DIR}%2Fmain/demo.md`, `${STATE_DIR}%2Fmain/demo.md.yjs`, 'app.exe']) {
       const response = await fetch(`${server.url}/api/blame/${bad}`);
       expect(response.status).toBe(400);
     }
@@ -200,30 +200,30 @@ describe('blame over HTTP', () => {
 
   test('the sidecar directory never appears in the doc list', async () => {
     const { server } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(0, 'force a sidecar write\n');
     await server.registry.flushAll();
 
     const { docs } = (await (await fetch(`${server.url}/api/docs`)).json()) as { docs: string[] };
-    expect(docs).toEqual(['demo.md', 'other.md']);
+    expect(docs).toEqual(['main/demo.md', 'main/other.md']);
   });
 });
 
 describe('blame persistence across restarts', () => {
   test('authorship survives a server restart via the state sidecar', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(alice.text.length, 'alice-line\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().includes('alice-line'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0; // server stopped explicitly; peers died with it
     alice.destroy();
 
-    expect(await Bun.file(join(vaultDir, STATE_DIR, 'demo.md.yjs')).exists()).toBe(true);
+    expect(await Bun.file(join(vaultDir, STATE_DIR, 'main/demo.md.yjs')).exists()).toBe(true);
 
     const restarted = await restartServer(vaultDir);
-    const lines = await fetchBlame(restarted, 'demo.md');
+    const lines = await fetchBlame(restarted, 'main/demo.md');
     expect(lines).toHaveLength(DEMO_LINES + 1);
     expect(authorsOf(lines[DEMO_LINES]!)).toEqual({ Alice: 'alice-line\n'.length });
     expect(lines[0]!.authors[0]!.name).toBe('disk');
@@ -231,9 +231,9 @@ describe('blame persistence across restarts', () => {
 
   test('a pre-rename .sharemd sidecar dir is migrated to STATE_DIR on startup', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(alice.text.length, 'alice-line\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().includes('alice-line'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0;
@@ -242,31 +242,31 @@ describe('blame persistence across restarts', () => {
     await rename(join(vaultDir, STATE_DIR), join(vaultDir, '.sharemd'));
 
     const restarted = await restartServer(vaultDir);
-    expect(await Bun.file(join(vaultDir, STATE_DIR, 'demo.md.yjs')).exists()).toBe(true);
-    const lines = await fetchBlame(restarted, 'demo.md');
+    expect(await Bun.file(join(vaultDir, STATE_DIR, 'main/demo.md.yjs')).exists()).toBe(true);
+    const lines = await fetchBlame(restarted, 'main/demo.md');
     expect(authorsOf(lines[DEMO_LINES]!)).toEqual({ Alice: 'alice-line\n'.length });
   });
 
   test('an offline markdown edit is blamed to "disk" without stealing surrounding authorship', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(alice.text.length, 'alpha beta gamma\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().includes('alpha beta gamma'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0;
     alice.destroy();
 
     // Offline edit inside Alice's line while the server is down.
-    const file = join(vaultDir, 'demo.md');
+    const file = join(vaultDir, 'main/demo.md');
     const offline = (await Bun.file(file).text()).replace('alpha beta gamma', 'alpha BETA gamma');
     await Bun.write(file, offline);
 
     const restarted = await restartServer(vaultDir);
-    const bob = await peer(restarted, 'demo.md');
+    const bob = await peer(restarted, 'main/demo.md');
     expect(bob.text.toString()).toBe(offline);
 
-    const lines = await fetchBlame(restarted, 'demo.md');
+    const lines = await fetchBlame(restarted, 'main/demo.md');
     const aliceLine = lines[DEMO_LINES]!;
     expect(authorsOf(aliceLine)).toEqual({
       Alice: 'alpha '.length + ' gamma\n'.length,
@@ -276,20 +276,20 @@ describe('blame persistence across restarts', () => {
 
   test('a corrupt sidecar falls back to the markdown file instead of crashing', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(0, 'alice-was-here\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().startsWith('alice-was-here'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0;
     alice.destroy();
 
-    await Bun.write(join(vaultDir, STATE_DIR, 'demo.md.yjs'), new Uint8Array([7, 7, 7, 7, 7]));
+    await Bun.write(join(vaultDir, STATE_DIR, 'main/demo.md.yjs'), new Uint8Array([7, 7, 7, 7, 7]));
 
     const restarted = await restartServer(vaultDir);
-    const bob = await peer(restarted, 'demo.md');
+    const bob = await peer(restarted, 'main/demo.md');
     expect(bob.text.toString()).toBe(`alice-was-here\n${DEMO_CONTENT}`);
-    const lines = await fetchBlame(restarted, 'demo.md');
+    const lines = await fetchBlame(restarted, 'main/demo.md');
     for (const line of lines) {
       expect(line.authors.map((a) => a.name)).toEqual(['disk']);
     }
@@ -297,22 +297,22 @@ describe('blame persistence across restarts', () => {
 
   test('a truncated sidecar still serves the markdown content', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(0, 'alice-was-here\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().startsWith('alice-was-here'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0;
     alice.destroy();
 
-    const sidecarPath = join(vaultDir, STATE_DIR, 'demo.md.yjs');
+    const sidecarPath = join(vaultDir, STATE_DIR, 'main/demo.md.yjs');
     const sidecar = new Uint8Array(await Bun.file(sidecarPath).arrayBuffer());
     await Bun.write(sidecarPath, sidecar.slice(0, Math.floor(sidecar.length * 0.6)));
 
     const restarted = await restartServer(vaultDir);
-    const bob = await peer(restarted, 'demo.md');
+    const bob = await peer(restarted, 'main/demo.md');
     expect(bob.text.toString()).toBe(`alice-was-here\n${DEMO_CONTENT}`);
-    const lines = await fetchBlame(restarted, 'demo.md');
+    const lines = await fetchBlame(restarted, 'main/demo.md');
     expect(lines.flatMap((l) => l.authors).reduce((sum, a) => sum + a.chars, 0)).toBe(
       `alice-was-here\n${DEMO_CONTENT}`.length,
     );
@@ -320,20 +320,20 @@ describe('blame persistence across restarts', () => {
 
   test('deleting the markdown file wins over a surviving sidecar', async () => {
     const { server, vaultDir } = await freshServer();
-    const alice = await peer(server, 'demo.md', 'Alice');
+    const alice = await peer(server, 'main/demo.md', 'Alice');
     alice.text.insert(0, 'doomed\n');
-    const room = await serverRoom(server, 'demo.md');
+    const room = await serverRoom(server, 'main/demo.md');
     await waitFor(() => room.toString().startsWith('doomed'), { label: 'server to see alice' });
     await server.stop();
     cleanups.length = 0;
     alice.destroy();
 
-    await rm(join(vaultDir, 'demo.md'));
+    await rm(join(vaultDir, 'main/demo.md'));
 
     const restarted = await restartServer(vaultDir);
-    const bob = await peer(restarted, 'demo.md');
+    const bob = await peer(restarted, 'main/demo.md');
     expect(bob.text.toString()).toBe('');
-    expect(await fetchBlame(restarted, 'demo.md')).toEqual([]);
+    expect(await fetchBlame(restarted, 'main/demo.md')).toEqual([]);
   });
 });
 
@@ -384,7 +384,7 @@ describe('blame_document over MCP', () => {
     await agent.call('open_document', { path: 'demo.md' });
     await agent.call('insert_text', { text: 'agent wisdom\n' });
 
-    const human = await peer(server, 'demo.md', 'Hank');
+    const human = await peer(server, 'main/demo.md', 'Hank');
     await waitFor(() => human.text.toString().includes('agent wisdom'), { label: 'human to see agent' });
     const at = human.text.toString().indexOf(' wisdom');
     human.text.delete(at, ' wisdom'.length);

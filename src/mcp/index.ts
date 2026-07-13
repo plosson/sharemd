@@ -2,13 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentRuntime } from './runtime';
-import { resolveIdentity } from './identity';
+import { resolveIdentity, resolveProject } from './identity';
 import type { AgentIdentity } from './session';
 import pkg from '../../package.json';
 
-function identityFromEnv(): AgentIdentity {
+function identityFromEnv(): { identity: AgentIdentity; project: string } {
   try {
-    return resolveIdentity(process.env);
+    return { identity: resolveIdentity(process.env), project: resolveProject(process.env) };
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -41,23 +41,26 @@ function respond(fn: () => unknown | Promise<unknown>): Promise<ToolResult> {
 
 /** Run the stdio MCP server until the transport closes (the process' whole life). */
 export async function runMcp(): Promise<void> {
-  const identity = identityFromEnv();
+  const { identity, project } = identityFromEnv();
   const { wsBase, httpBase } = resolveServerUrls();
-  const runtime = new AgentRuntime(wsBase, httpBase, identity);
+  const runtime = new AgentRuntime(wsBase, httpBase, identity, project);
 
   const server = new McpServer({ name: pkg.name, version: pkg.version });
 
   server.registerTool(
     'list_documents',
-    { description: 'List the markdown documents available in the shared workspace.' },
-    () => respond(async () => ({ docs: await runtime.listDocuments() })),
+    {
+      description:
+        'List the markdown documents in your project (this MCP peer is scoped to one project of the shared workspace). Paths are project-relative.',
+    },
+    () => respond(async () => ({ project, docs: await runtime.listDocuments() })),
   );
 
   server.registerTool(
     'open_document',
     {
       description:
-        'Open a document by path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document.',
+        'Open a document by project-relative path and join its live collaboration session. Other collaborators (humans and agents) may be editing it at the same time; all edits merge in realtime. Opens replace the previously open document.',
       inputSchema: { path: z.string().min(1) },
     },
     ({ path }) => respond(() => runtime.openDocument(path)),
@@ -262,7 +265,7 @@ export async function runMcp(): Promise<void> {
     process.exit(0);
   };
   await server.connect(transport);
-  console.error(`mdio MCP ready — agent "${identity.name}" targeting ${httpBase}`);
+  console.error(`mdio MCP ready — agent "${identity.name}" on project "${project}" targeting ${httpBase}`);
 }
 
 if (import.meta.main) {

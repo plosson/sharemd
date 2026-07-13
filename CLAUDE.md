@@ -24,7 +24,11 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 - `src/server/` — Bun HTTP + WebSocket server speaking the standard y-websocket wire
   protocol (`/ws/<vault-relative-path>`, one Yjs room per file). Rooms hydrate from disk
   and persist back debounced (400ms); every update is also appended to an NDJSON history
-  log served at `/api/history/<path>`. `vault.ts` guards path traversal and file types.
+  log served at `/api/history/<path>`. `vault.ts` guards path traversal and file types,
+  and owns the project model: top-level vault directories are projects, every document
+  lives inside one (`/api/projects` lists them, `/api/docs?project=` filters). Documents
+  get stable path URLs — the server serves the app shell for `/<project>/<doc-path>` and
+  bare `/<project>` pages (view state stays in the URL hash).
 - `src/client/` — web UI, bundled (minified) by `Bun.build` at server startup (no build
   step). CodeMirror 6 + `y-codemirror.next` for remote cursors; `remote-edits.ts` flashes
   transient author-attributed highlights on remote inserts; `comments.ts` (thread panel +
@@ -66,6 +70,16 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   relative-position anchors, see `src/shared/comments.ts`); the room name is the
   vault-relative file path. All are shared contracts between server, client, and MCP —
   change them everywhere or nowhere.
+- Every document lives inside a project: `vault/<project>/<doc-path>`, so the room name,
+  the vault-relative path, and the web URL `/<project>/<doc-path>` are the same string.
+  Project names cannot shadow server routes (`api`, `ws`, `app.js`, `styles.css`,
+  `install.sh`, `install.ps1`) or start with a dot. Pre-projects vaults are migrated once
+  at startup: root documents (and their `.mdio/` sidecars) move into `main/`, and legacy
+  `#doc=` / root-doc links resolve through the default project in the client.
+- An MCP peer is scoped to exactly one project (`MDIO_PROJECT`, required): tool paths are
+  project-relative (`notes.md`, not `main/notes.md`), `list_documents` sees nothing else,
+  and the runtime prefixes the project onto room names. Like identity, this is
+  convention/trust, not auth — enforced in the MCP runtime, not the server.
 - Docs that compute blame (server rooms, MCP sessions) are created with `gc: false` so
   deleted items survive for snapshot diffs; peers must register in the `authors` map on
   connect, before their first edit.
@@ -90,7 +104,7 @@ Easiest — install the binary from a running server, then wire the project:
 
 ```sh
 curl -fsSL http://localhost:4321/install.sh | sh
-mdio mcp install --server http://localhost:4321 --username plosson/claude
+mdio mcp install --server http://localhost:4321 --username plosson/claude --project main
 mdio skill install
 ```
 
@@ -104,7 +118,8 @@ Or by hand (e.g. from a checkout, without the binary):
       "args": ["run", "<repo>/src/mcp/index.ts"],
       "env": {
         "MDIO_SERVER": "http://localhost:4321",
-        "MDIO_USERNAME": "plosson/claude"
+        "MDIO_USERNAME": "plosson/claude",
+        "MDIO_PROJECT": "main"
       }
     }
   }

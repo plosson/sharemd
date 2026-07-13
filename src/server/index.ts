@@ -112,8 +112,20 @@ export async function startServer({
         case '/styles.css':
           return new Response(styles, { headers: { 'Content-Type': 'text/css; charset=utf-8' } });
         case '/api/docs':
-          return Response.json({ docs: await vault.list() });
+          return Response.json({ docs: await vault.list(url.searchParams.get('project') ?? undefined) });
+        case '/api/projects':
+          return Response.json({ projects: await vault.listProjects() });
         default:
+          // Documents live at stable paths (/project/notes/plan.md) and bare
+          // project pages at /project: serve the app shell for both, 404 the rest.
+          if (
+            req.method === 'GET' &&
+            (/\.(md|markdown|txt)$/i.test(url.pathname) || /^\/[^/.]+\/?$/.test(url.pathname))
+          ) {
+            return new Response(indexHtml, {
+              headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+          }
           return new Response('Not found', { status: 404 });
       }
     },

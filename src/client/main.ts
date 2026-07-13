@@ -89,6 +89,9 @@ function promptForUser(): Promise<string> {
 }
 
 let user: { name: string; color: string; colorLight: string };
+/** Pre-projects vaults' root documents were migrated here — legacy links follow them. */
+const DEFAULT_PROJECT = 'main';
+const projectSelect = document.querySelector('#project-select')! as HTMLSelectElement;
 const docList = document.querySelector('#doc-list')!;
 const editorHost = document.querySelector('#editor')!;
 const docTitle = document.querySelector('#doc-title')!;
@@ -129,14 +132,9 @@ function renderPresence(provider: WebsocketProvider) {
  * history entry, clears any focused comment), 'replace' (boot: normalize the
  * hash, keep comment focus from the URL), 'none' (hashchange already has it).
  */
-function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push') {
-  if (urlMode === 'push') {
-    writeUrlState({ doc: path, comment: null }, { push: true });
-  } else if (urlMode === 'replace') {
-    writeUrlState({ doc: path });
-  }
+function teardownEditor() {
   closeHistory();
-  currentPath = path;
+  currentPath = null;
   if (current) {
     current.cleanup();
     current.view.destroy();
@@ -144,6 +142,24 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
     current.doc.destroy();
     current = null;
   }
+}
+
+function closeDocument() {
+  teardownEditor();
+  docTitle.textContent = 'Select a document';
+  for (const item of docList.querySelectorAll('li')) {
+    item.classList.remove('active');
+  }
+}
+
+function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push') {
+  if (urlMode === 'push') {
+    writeUrlState({ doc: path, comment: null }, { push: true });
+  } else if (urlMode === 'replace') {
+    writeUrlState({ doc: path });
+  }
+  teardownEditor();
+  currentPath = path;
   docTitle.textContent = path;
   for (const item of docList.querySelectorAll('li')) {
     item.classList.toggle('active', item.dataset.path === path);
@@ -210,19 +226,91 @@ function applyViewState(state: UrlState) {
   focusThread(state.comment);
 }
 
-async function init() {
-  const response = await fetch('/api/docs');
-  const { docs } = (await response.json()) as { docs: string[] };
+let projects: string[] = [];
+let currentProject: string | null = null;
+let docs: string[] = [];
+
+function renderProjectSelect() {
+  projectSelect.innerHTML = '';
+  for (const name of projects) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    projectSelect.appendChild(option);
+  }
+  projectSelect.hidden = projects.length === 0;
+  if (currentProject) {
+    projectSelect.value = currentProject;
+  }
+}
+
+function renderDocList() {
   docList.innerHTML = '';
   for (const path of docs) {
     const item = document.createElement('li');
-    item.textContent = path;
+    // The sidebar is scoped to one project — show paths without its prefix.
+    item.textContent = currentProject ? path.slice(currentProject.length + 1) : path;
     item.dataset.path = path;
+    item.classList.toggle('active', path === currentPath);
     item.addEventListener('click', () => openDocument(path));
     docList.appendChild(item);
   }
+}
 
-  // Legacy ?doc= links migrate into the hash, once.
+async function loadProject(project: string | null): Promise<void> {
+  currentProject = project;
+  if (project) {
+    const response = await fetch(`/api/docs?project=${encodeURIComponent(project)}`);
+    ({ docs } = (await response.json()) as { docs: string[] });
+  } else {
+    docs = [];
+  }
+  renderProjectSelect();
+  renderDocList();
+}
+
+/**
+ * Map a requested doc to one that exists: legacy pre-projects links name root
+ * documents that were migrated into the default project; anything still
+ * unknown falls back to the first doc of the current project.
+ */
+function resolveRequested(requested: string | null): string | null {
+  if (requested && docs.includes(requested)) {
+    return requested;
+  }
+  if (requested && !requested.includes('/') && docs.includes(`${DEFAULT_PROJECT}/${requested}`)) {
+    return `${DEFAULT_PROJECT}/${requested}`;
+  }
+  return docs[0] ?? null;
+}
+
+async function navigate(state: UrlState, urlMode: 'replace' | 'none') {
+  let requested = state.doc;
+  if (requested && !requested.includes('/')) {
+    requested = `${DEFAULT_PROJECT}/${requested}`; // legacy root-doc link
+  }
+  const project = requested?.split('/')[0] ?? state.project;
+  const target = project && projects.includes(project) ? project : projects[0] ?? null;
+  if (target !== currentProject) {
+    await loadProject(target);
+  }
+  const doc = resolveRequested(state.doc);
+  if (doc && doc !== currentPath) {
+    // A rewritten (legacy or fallback) doc must normalize the URL even on
+    // back/forward navigation, or the address bar keeps the stale path.
+    openDocument(doc, doc === state.doc && urlMode === 'none' ? 'none' : 'replace');
+  } else if (!doc) {
+    closeDocument();
+    writeUrlState({ doc: null, project: currentProject });
+  }
+  applyViewState(state);
+}
+
+async function init() {
+  const response = await fetch('/api/projects');
+  ({ projects } = (await response.json()) as { projects: string[] });
+
+  // Legacy ?doc= links migrate into the path, once.
   const params = new URLSearchParams(location.search);
   const legacy = params.get('doc');
   if (legacy) {
@@ -232,25 +320,20 @@ async function init() {
   }
 
   const urlState = readUrlState();
-  const requested = urlState.doc ?? legacy;
-  const initial = requested && docs.includes(requested) ? requested : docs[0];
-  if (initial) {
-    openDocument(initial, 'replace');
-    applyViewState(urlState);
-  }
+  await navigate({ ...urlState, doc: urlState.doc ?? legacy }, 'replace');
 
-  // Back/forward and hand-edited URLs. An unknown doc falls back to the first
-  // document and normalizes the hash, same as the boot path.
-  onUrlChange((state) => {
-    if (state.doc && state.doc !== currentPath) {
-      if (docs.includes(state.doc)) {
-        openDocument(state.doc, 'none');
-      } else if (docs[0]) {
-        openDocument(docs[0], 'replace');
-      }
+  projectSelect.addEventListener('change', async () => {
+    await loadProject(projectSelect.value);
+    if (docs[0]) {
+      openDocument(docs[0]);
+    } else {
+      closeDocument();
+      writeUrlState({ doc: null, project: currentProject, comment: null }, { push: true });
     }
-    applyViewState(state);
   });
+
+  // Back/forward and hand-edited URLs, same resolution as the boot path.
+  onUrlChange((state) => void navigate(state, 'none'));
 }
 
 async function main() {

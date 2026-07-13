@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { connectPeer, startTestServer } from './helpers';
+import { connectPeer, startTestServer, waitFor } from './helpers';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -39,8 +39,8 @@ function waitForText(selector: string, text: string, timeoutMs = 10_000) {
 test(
   'two MCP agents and a human edit the same document concurrently without losing anything',
   async () => {
-    // Human opens demo.md in the real web UI.
-    await page.goto(`${server.url}/?name=Human&doc=demo.md`);
+    // Human opens main/demo.md in the real web UI.
+    await page.goto(`${server.url}/?name=Human&doc=main/demo.md`);
     await waitForText('.cm-content', 'Demo document');
 
     // Agents join the same document over MCP.
@@ -87,7 +87,7 @@ test(
 
     // And the merged result is persisted to the markdown file on disk.
     await server.registry.flushAll();
-    const onDisk = await Bun.file(join(vaultDir, 'demo.md')).text();
+    const onDisk = await Bun.file(join(vaultDir, 'main/demo.md')).text();
     expect(onDisk).toInclude('HUMAN: typed live from the browser');
     expect(onDisk).toInclude('ALICE: first paragraph, streamed.');
     expect(onDisk).toInclude('ALICE: second paragraph, streamed.');
@@ -102,7 +102,7 @@ test(
 test(
   'remote edits flash a transient highlight attributed to the author',
   async () => {
-    const carol = await connectPeer(server, 'demo.md');
+    const carol = await connectPeer(server, 'main/demo.md');
     try {
       carol.provider.awareness.setLocalStateField('user', {
         name: 'Carol',
@@ -150,7 +150,7 @@ test(
   async () => {
     await page.click('#history-open');
     await page.waitForSelector('#history:not([hidden])');
-    expect(await page.textContent('#history-title')).toBe('demo.md — history');
+    expect(await page.textContent('#history-title')).toBe('main/demo.md — history');
 
     // Opens at the latest entry: everything everyone wrote is there.
     await waitForText('#history-editor .cm-content', 'BOB: appended a closing line.');
@@ -355,12 +355,12 @@ test(
 );
 
 test(
-  'url hash tracks navigation and restores doc, preview, and comment focus across reload',
+  'url tracks navigation and restores doc, preview, and comment focus across reload',
   async () => {
-    // Switching documents pushes a history entry with the doc in the hash.
-    await page.click('li[data-path="other.md"]');
-    await waitForText('#doc-title', 'other.md');
-    await page.waitForFunction(() => location.hash.includes('doc=other.md'));
+    // Switching documents pushes a history entry with the doc as the path.
+    await page.click('li[data-path="main/other.md"]');
+    await waitForText('#doc-title', 'main/other.md');
+    await page.waitForFunction(() => location.pathname === '/main/other.md');
 
     // View state (preview) is reflected in the hash without new history entries.
     await page.click('#preview-toggle');
@@ -381,26 +381,26 @@ test(
     // Reload: same document, preview open, same thread focused.
     await page.reload();
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'other.md');
+    await waitForText('#doc-title', 'main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
     await page.waitForSelector('.comment-card.focused');
     expect(await page.textContent('.comment-card.focused')).toInclude('deep-linkable thread');
 
     // Back returns to the previous document (and its view state: preview off).
     await page.goBack();
-    await waitForText('#doc-title', 'demo.md');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
     await page.waitForSelector('#preview', { state: 'hidden' });
   },
   30_000,
 );
 
 test(
-  'url hash edge cases: filter state, click focus, manual edits, bad doc, stale comment, legacy param',
+  'url edge cases: filter state, click focus, direct paths, bad doc, stale comment, legacy links',
   async () => {
-    // Legacy ?doc= was migrated into the hash at boot: query is clean, hash has the doc.
+    // Legacy ?doc= was migrated into the path at boot: query is clean, doc is the path.
     expect(await page.evaluate(() => location.search)).toBe('');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
     // The resolved filter round-trips: checkbox → hash → reload.
     await page.check('#comments-show-resolved');
@@ -416,23 +416,31 @@ test(
     await page.waitForFunction(() => location.hash.includes('comment=c-'));
     await page.waitForSelector('.comment-card.focused');
 
-    // Hand-editing the hash navigates and applies view state.
-    await page.evaluate(() => {
-      location.hash = '#doc=other.md&preview=1';
-    });
-    await waitForText('#doc-title', 'other.md');
+    // A direct path URL loads that document with its view state applied.
+    await page.goto(`${server.url}/main/other.md#preview=1`);
+    await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
 
-    // An unknown document falls back to the first doc and normalizes the hash.
-    await page.goto(`${server.url}/#doc=does-not-exist.md`);
+    // An unknown document falls back to the first doc and normalizes the path.
+    await page.goto(`${server.url}/does-not-exist.md`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'demo.md');
-    await page.waitForFunction(() => location.hash.includes('doc=demo.md'));
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
 
+    // Legacy hash links (#doc=…) still resolve, and normalize to the path form.
     // A stale comment id is ignored: page loads, nothing focused, no errors.
-    await page.goto(`${server.url}/#doc=demo.md&comment=c-deleted-long-ago`);
+    await page.goto(`${server.url}/#doc=main/demo.md&comment=c-deleted-long-ago`);
     await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
     expect(await page.locator('.comment-card.focused').count()).toBe(0);
+
+    // Pre-projects links name root docs that were migrated into the default project.
+    await page.goto(`${server.url}/#doc=demo.md`);
+    await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
   },
   30_000,
 );
@@ -474,6 +482,44 @@ test(
     } finally {
       await context.close();
     }
+  },
+  30_000,
+);
+
+test(
+  'projects: the sidebar is scoped to one project and the switcher navigates between them',
+  async () => {
+    // A second project springs into existence when a peer edits a doc in it.
+    const writer = await connectPeer(server, 'specs/plan.md');
+    writer.text.insert(0, '# Plan\n\nSpec things.\n');
+    const room = await server.registry.open('specs/plan.md');
+    await waitFor(() => room.doc.getText('content').toString().includes('# Plan'), {
+      label: 'server room to receive the edit',
+    });
+    writer.destroy();
+    await server.registry.flushAll(); // the project dir exists once the doc persists
+
+    await page.goto(`${server.url}/specs/plan.md`);
+    await page.waitForSelector('.cm-content');
+    await waitForText('#doc-title', 'specs/plan.md');
+
+    // Sidebar is scoped: this project's docs (sans prefix), none of main's.
+    const selected = () =>
+      page.evaluate(() => (document.querySelector('#project-select') as HTMLSelectElement).value);
+    expect(await selected()).toBe('specs');
+    await waitForText('#doc-list', 'plan.md');
+    expect(await page.locator('li[data-path="main/demo.md"]').count()).toBe(0);
+
+    // Switching projects opens that project's first document.
+    await page.selectOption('#project-select', 'main');
+    await waitForText('#doc-title', 'main/demo.md');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+
+    // Back crosses the project boundary and the switcher follows.
+    await page.goBack();
+    await waitForText('#doc-title', 'specs/plan.md');
+    await page.waitForFunction(() => location.pathname === '/specs/plan.md');
+    expect(await selected()).toBe('specs');
   },
   30_000,
 );

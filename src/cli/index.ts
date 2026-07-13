@@ -17,6 +17,7 @@ Usage:
   mdio mcp install [options]    Add/refresh the mdio entry in ./.mcp.json
       --server <url>            mdio server URL (default: $MDIO_SERVER)
       --username <name>         "you" (human) or "you/agent" (default: $MDIO_USERNAME)
+      --project <name>          vault project this peer is scoped to (default: $MDIO_PROJECT or "main")
       --command <cmd>           command written to .mcp.json (default: mdio)
   mdio skill install [--user]   Install the Claude skill to <cwd>/.claude/skills/mdio/
                                 (--user installs to ~/.claude/skills/mdio/ instead)
@@ -37,20 +38,22 @@ async function mcpInstallCommand(args: string[]): Promise<void> {
     options: {
       server: { type: 'string' },
       username: { type: 'string' },
+      project: { type: 'string' },
       command: { type: 'string' },
     },
   });
   const server = values.server ?? process.env.MDIO_SERVER;
   const username = values.username ?? process.env.MDIO_USERNAME;
+  const project = values.project ?? process.env.MDIO_PROJECT ?? 'main';
   if (!server) {
     fail('mcp install needs --server <url> (or MDIO_SERVER set).');
   }
   if (!username) {
     fail('mcp install needs --username <name> (or MDIO_USERNAME set) — "you" or "you/agent".');
   }
-  const result = await installMcpConfig({ server, username, command: values.command });
+  const result = await installMcpConfig({ server, username, project, command: values.command });
   console.log(`${result.action === 'created' ? 'Created' : 'Updated'} ${result.path}`);
-  console.log(`  mdio → ${result.entry.command} mcp  (server ${result.entry.env.MDIO_SERVER}, user ${result.entry.env.MDIO_USERNAME})`);
+  console.log(`  mdio → ${result.entry.command} mcp  (server ${result.entry.env.MDIO_SERVER}, user ${result.entry.env.MDIO_USERNAME}, project ${result.entry.env.MDIO_PROJECT})`);
   if (result.entry.command === 'mdio' && !Bun.which('mdio')) {
     console.error('warning: "mdio" is not on your PATH — MCP hosts will fail to launch it.');
     console.error('         Install it first: curl -fsSL <server>/install.sh | sh');
