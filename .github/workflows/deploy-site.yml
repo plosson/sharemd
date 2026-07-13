@@ -1,0 +1,30 @@
+name: Deploy Site (siteio)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to mdio.houlahop.com
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install siteio
+        run: |
+          curl -LsSf https://siteio.houlahop.com/install | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Login
+        run: siteio login --username github-actions
+        env:
+          SITEIO_TOKEN: ${{ secrets.SITEIO_TOKEN }}
+
+      - name: Deploy site
+        run: siteio sites deploy site -n mdio
