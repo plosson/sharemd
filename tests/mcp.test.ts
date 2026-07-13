@@ -432,9 +432,12 @@ describe('username convention', () => {
     expect(resolveIdentity({ MDIO_USERNAME: 'plosson' }).role).toBe('human');
   });
 
-  test('a lingering legacy MDIO_AGENT_NAME gets a migration hint', () => {
-    expect(() => resolveIdentity({ MDIO_AGENT_NAME: 'Claude' })).toThrow(
-      /MDIO_AGENT_NAME was replaced by MDIO_USERNAME/,
+  test('a lingering pre-rename SHAREMD_USERNAME gets a migration hint', () => {
+    expect(() => resolveIdentity({ SHAREMD_USERNAME: 'plosson/claude' })).toThrow(
+      /SHAREMD_\* env vars were replaced by MDIO_\*/,
+    );
+    expect(() => resolveIdentity({ SHAREMD_AGENT_NAME: 'Claude' })).toThrow(
+      /SHAREMD_\* env vars were replaced by MDIO_\*/,
     );
   });
 

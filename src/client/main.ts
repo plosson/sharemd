@@ -58,7 +58,8 @@ function storedUser(): string | null {
     url.searchParams.delete('name');
     history.replaceState(null, '', url);
   }
-  const stored = localStorage.getItem(NAME_KEY)?.trim() ?? '';
+  // Read through to the pre-rename key so existing users stay logged in.
+  const stored = (localStorage.getItem(NAME_KEY) ?? localStorage.getItem('sharemd-name'))?.trim() ?? '';
   return usernameError(stored) === null ? stored : null;
 }
 

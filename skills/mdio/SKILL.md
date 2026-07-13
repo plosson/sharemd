@@ -12,7 +12,7 @@ conflicts, so never wait for or ask permission before editing.
 
 ## The one hard rule
 
-**Never touch vault files on disk.** If a document lives in a mdio vault, do not use
+**Never touch vault files on disk.** If a document lives in an mdio vault, do not use
 file tools (Read/Edit/Write, `cat`, `sed`, …) on it — the mdio server is the sole
 writer of vault files, there is no file watcher, and disk edits made while the server
 runs are silently lost or diverge. Always go through the mdio MCP tools.

@@ -45,7 +45,7 @@ export async function runMcp(): Promise<void> {
   const { wsBase, httpBase } = resolveServerUrls();
   const runtime = new AgentRuntime(wsBase, httpBase, identity);
 
-  const server = new McpServer({ name: 'mdio', version: pkg.version });
+  const server = new McpServer({ name: pkg.name, version: pkg.version });
 
   server.registerTool(
     'list_documents',

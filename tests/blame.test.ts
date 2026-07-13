@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
 import * as Y from 'yjs';
 import { connectPeer, DEMO_CONTENT, startTestServer, waitFor, type TestPeer } from './helpers';
 import { startServer, type MdioServer } from '../src/server/index';
+import { STATE_DIR } from '../src/server/vault';
 import { blameLines, registerAuthor, type BlameLine } from '../src/shared/blame';
 import { AgentClient } from './mcp-client';
 
@@ -191,7 +192,7 @@ describe('blame over HTTP', () => {
 
   test('rejects traversal, sidecar-dir, and non-text paths', async () => {
     const { server } = await freshServer();
-    for (const bad of ['..%2Fsecret.md', '.mdio%2Fdemo.md', '.mdio%2Fdemo.md.yjs', 'app.exe']) {
+    for (const bad of ['..%2Fsecret.md', `${STATE_DIR}%2Fdemo.md`, `${STATE_DIR}%2Fdemo.md.yjs`, 'app.exe']) {
       const response = await fetch(`${server.url}/api/blame/${bad}`);
       expect(response.status).toBe(400);
     }
@@ -219,13 +220,31 @@ describe('blame persistence across restarts', () => {
     cleanups.length = 0; // server stopped explicitly; peers died with it
     alice.destroy();
 
-    expect(await Bun.file(join(vaultDir, '.mdio', 'demo.md.yjs')).exists()).toBe(true);
+    expect(await Bun.file(join(vaultDir, STATE_DIR, 'demo.md.yjs')).exists()).toBe(true);
 
     const restarted = await restartServer(vaultDir);
     const lines = await fetchBlame(restarted, 'demo.md');
     expect(lines).toHaveLength(DEMO_LINES + 1);
     expect(authorsOf(lines[DEMO_LINES]!)).toEqual({ Alice: 'alice-line\n'.length });
     expect(lines[0]!.authors[0]!.name).toBe('disk');
+  });
+
+  test('a pre-rename .sharemd sidecar dir is migrated to STATE_DIR on startup', async () => {
+    const { server, vaultDir } = await freshServer();
+    const alice = await peer(server, 'demo.md', 'Alice');
+    alice.text.insert(alice.text.length, 'alice-line\n');
+    const room = await serverRoom(server, 'demo.md');
+    await waitFor(() => room.toString().includes('alice-line'), { label: 'server to see alice' });
+    await server.stop();
+    cleanups.length = 0;
+    alice.destroy();
+
+    await rename(join(vaultDir, STATE_DIR), join(vaultDir, '.sharemd'));
+
+    const restarted = await restartServer(vaultDir);
+    expect(await Bun.file(join(vaultDir, STATE_DIR, 'demo.md.yjs')).exists()).toBe(true);
+    const lines = await fetchBlame(restarted, 'demo.md');
+    expect(authorsOf(lines[DEMO_LINES]!)).toEqual({ Alice: 'alice-line\n'.length });
   });
 
   test('an offline markdown edit is blamed to "disk" without stealing surrounding authorship', async () => {
@@ -265,7 +284,7 @@ describe('blame persistence across restarts', () => {
     cleanups.length = 0;
     alice.destroy();
 
-    await Bun.write(join(vaultDir, '.mdio', 'demo.md.yjs'), new Uint8Array([7, 7, 7, 7, 7]));
+    await Bun.write(join(vaultDir, STATE_DIR, 'demo.md.yjs'), new Uint8Array([7, 7, 7, 7, 7]));
 
     const restarted = await restartServer(vaultDir);
     const bob = await peer(restarted, 'demo.md');
@@ -286,7 +305,7 @@ describe('blame persistence across restarts', () => {
     cleanups.length = 0;
     alice.destroy();
 
-    const sidecarPath = join(vaultDir, '.mdio', 'demo.md.yjs');
+    const sidecarPath = join(vaultDir, STATE_DIR, 'demo.md.yjs');
     const sidecar = new Uint8Array(await Bun.file(sidecarPath).arrayBuffer());
     await Bun.write(sidecarPath, sidecar.slice(0, Math.floor(sidecar.length * 0.6)));
 

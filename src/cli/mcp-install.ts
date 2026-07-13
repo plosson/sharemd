@@ -51,17 +51,23 @@ export async function installMcpConfig(options: McpInstallOptions): Promise<McpI
   }
 
   const servers = (config.mcpServers ??= {}) as Record<string, unknown>;
-  const previous = (servers.mdio ?? {}) as Record<string, unknown>;
+  // A pre-rename `sharemd` entry is ours too: absorb it into `mdio`, dropping
+  // the old env spellings it carried.
+  const previous = (servers.mdio ?? servers.sharemd ?? {}) as Record<string, unknown>;
+  const previousEnv = { ...((previous.env as Record<string, string>) ?? {}) };
+  delete previousEnv.SHAREMD_SERVER;
+  delete previousEnv.SHAREMD_USERNAME;
   const entry: McpServerEntry = {
     command: options.command ?? 'mdio',
     args: ['mcp'],
     env: {
-      ...((previous.env as Record<string, string>) ?? {}),
+      ...previousEnv,
       MDIO_SERVER: server,
       MDIO_USERNAME: options.username,
     },
   };
   servers.mdio = { ...previous, ...entry };
+  delete servers.sharemd;
 
   await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
   return { path, action: exists ? 'updated' : 'created', entry };
@@ -75,8 +81,13 @@ export async function readMcpConfig(cwd = process.cwd()): Promise<Record<string,
   }
   try {
     const config = JSON.parse(await file.text()) as McpJson;
-    const entry = (config.mcpServers as Record<string, { env?: Record<string, string> }> | undefined)?.mdio;
-    return entry?.env ?? null;
+    const servers = config.mcpServers as Record<string, { env?: Record<string, string> }> | undefined;
+    const env = (servers?.mdio ?? servers?.sharemd)?.env;
+    if (!env) {
+      return null;
+    }
+    // A pre-rename entry spells the server SHAREMD_SERVER — surface it as MDIO_SERVER.
+    return env.MDIO_SERVER || !env.SHAREMD_SERVER ? env : { ...env, MDIO_SERVER: env.SHAREMD_SERVER };
   } catch {
     return null;
   }

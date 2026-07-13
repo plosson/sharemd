@@ -2,7 +2,7 @@
 // The `mdio` client CLI. Its editing surface IS the MCP (`mdio mcp` runs
 // the stdio server; the MCP host keeps the process alive); the other
 // subcommands are one-shot lifecycle helpers: wiring .mcp.json, installing the
-// bundled Claude skill, and self-updating against a mdio server.
+// bundled Claude skill, and self-updating against an mdio server.
 import { parseArgs } from 'node:util';
 import pkg from '../../package.json';
 import { runMcp } from '../mcp/index';
@@ -10,16 +10,16 @@ import { installMcpConfig } from './mcp-install';
 import { installSkill, type InstallScope } from './skill-install';
 import { runUpdate } from './update';
 
-const USAGE = `mdio ${pkg.version} — collaborative markdown client (MCP + installers)
+const USAGE = `${pkg.name} ${pkg.version} — collaborative markdown client (MCP + installers)
 
 Usage:
   mdio mcp                      Run the stdio MCP server (what an MCP host launches)
   mdio mcp install [options]    Add/refresh the mdio entry in ./.mcp.json
-      --server <url>               mdio server URL (default: $MDIO_SERVER)
-      --username <name>            "you" (human) or "you/agent" (default: $MDIO_USERNAME)
-      --command <cmd>              command written to .mcp.json (default: mdio)
+      --server <url>            mdio server URL (default: $MDIO_SERVER)
+      --username <name>         "you" (human) or "you/agent" (default: $MDIO_USERNAME)
+      --command <cmd>           command written to .mcp.json (default: mdio)
   mdio skill install [--user]   Install the Claude skill to <cwd>/.claude/skills/mdio/
-                                   (--user installs to ~/.claude/skills/mdio/ instead)
+                                (--user installs to ~/.claude/skills/mdio/ instead)
   mdio update [--server <url>]  Update this binary from the server's install script
   mdio version                  Print the version
 

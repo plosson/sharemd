@@ -1,3 +1,4 @@
+import { existsSync, renameSync } from 'node:fs';
 import { appendFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 
@@ -5,12 +6,20 @@ const EDITABLE_EXTENSIONS = ['.md', '.markdown', '.txt'];
 
 /** Server-private directory inside the vault holding CRDT state sidecars. */
 export const STATE_DIR = '.mdio';
+/** Pre-rename sidecar directory, migrated to STATE_DIR on first open. */
+const LEGACY_STATE_DIR = '.sharemd';
 
 export class Vault {
   readonly root: string;
 
   constructor(root: string) {
     this.root = resolve(root);
+    // One-shot migration: vaults written before the mdio rename keep their
+    // blame/comment/history sidecars under the old directory name.
+    const legacy = join(this.root, LEGACY_STATE_DIR);
+    if (existsSync(legacy) && !existsSync(join(this.root, STATE_DIR))) {
+      renameSync(legacy, join(this.root, STATE_DIR));
+    }
   }
 
   /** Resolve a vault-relative document path, rejecting traversal and non-text files. */

@@ -227,7 +227,7 @@ describe('distribution routes', () => {
     const response = await fetch(`${server.url}/api/cli/${platform.id}`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-length')).toBe('17');
-    expect(response.headers.get('content-disposition')).toContain('filename="mdio"');
+    expect(response.headers.get('content-disposition')).toContain(`filename="${platform.saveAs}"`);
     expect(await response.text()).toBe('fake-binary-bytes');
   });
 });
@@ -284,8 +284,8 @@ describe('compiled binary end-to-end', () => {
         MDIO_INSTALL_DIR: installDir,
       });
       expect(result.code).toBe(0);
-      installedBin = join(installDir, 'mdio');
-      expect(result.stdout + result.stderr).toContain(`Installed mdio to ${installedBin}`);
+      installedBin = join(installDir, cliPlatform(currentPlatformId())!.saveAs);
+      expect(result.stdout + result.stderr).toContain(`Installed ${cliPlatform(currentPlatformId())!.saveAs} to ${installedBin}`);
       const version = await run([installedBin, 'version']);
       expect(version.stdout.trim()).toBe(pkg.version);
     },

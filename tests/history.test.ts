@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import * as Y from 'yjs';
 import { connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
 import { startServer, type MdioServer } from '../src/server/index';
+import { STATE_DIR } from '../src/server/vault';
 
 let server: MdioServer;
 let vaultDir: string;
@@ -31,7 +32,7 @@ interface LogEntry {
 }
 
 async function readLog(docPath: string): Promise<LogEntry[]> {
-  const raw = await Bun.file(join(vaultDir, '.mdio', `${docPath}.log`)).text();
+  const raw = await Bun.file(join(vaultDir, STATE_DIR, `${docPath}.log`)).text();
   return raw
     .trim()
     .split('\n')
@@ -125,7 +126,7 @@ describe('history log', () => {
   test('a missing sidecar restarts the log from a full-state seed', async () => {
     await server.stop();
     const { unlink } = await import('node:fs/promises');
-    await unlink(join(vaultDir, '.mdio', 'demo.md.yjs'));
+    await unlink(join(vaultDir, STATE_DIR, 'demo.md.yjs'));
 
     server = await startServer({ vaultDir, port: 0 });
     const alice = await peer('demo.md');

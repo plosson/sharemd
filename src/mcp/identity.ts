@@ -39,8 +39,8 @@ export function parseUsername(raw: string): ParsedUsername {
 export function resolveIdentity(env: Record<string, string | undefined>): AgentIdentity {
   const raw = env.MDIO_USERNAME;
   if (!raw) {
-    const legacyHint = env.MDIO_AGENT_NAME
-      ? ' MDIO_AGENT_NAME was replaced by MDIO_USERNAME — use "owner/agent" for agents, e.g. "plosson/claude".'
+    const legacyHint = env.SHAREMD_USERNAME || env.SHAREMD_AGENT_NAME
+      ? ' SHAREMD_* env vars were replaced by MDIO_* — set MDIO_USERNAME, "owner/agent" for agents, e.g. "plosson/claude".'
       : '';
     throw new Error(`MDIO_USERNAME is required — set it in the MCP server config env.${legacyHint}`);
   }

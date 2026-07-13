@@ -154,6 +154,11 @@ export async function startServer({
 }
 
 if (import.meta.main) {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('SHAREMD_')) {
+      console.error(`warning: ${key} is ignored — env vars were renamed, use MDIO_${key.slice('SHAREMD_'.length)}.`);
+    }
+  }
   const args = Bun.argv.slice(2);
   const portFlag = args.indexOf('--port');
   const port = portFlag >= 0 ? Number(args[portFlag + 1]) : Number(process.env.MDIO_PORT || 4321);
