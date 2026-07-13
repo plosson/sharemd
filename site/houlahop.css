@@ -1,0 +1,415 @@
+/* ============================================================
+   HOULAHOP — shared styles, v1
+   A problem-oriented capability catalog for AI agents.
+   Register: minimal, calm, terminal-flavoured. Dark palette,
+   monospace type, one accent per tool — no gimmicks.
+   Every houlahop page links this file; capability pages may
+   override --hh-accent with their own colour.
+   ============================================================ */
+
+:root {
+  --hh-bg: #0d1117;
+  --hh-ink: #e6edf3;
+  --hh-muted: #9198a1;
+  --hh-faint: #6e7681;
+  --hh-border: #21262d;
+  --hh-border-strong: #30363d;
+  --hh-surface: #161b22;
+  --hh-accent: #3fb950;            /* terminal green — pages override this */
+  --hh-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --hh-max-width: 800px;
+  --hh-measure: 44rem;
+  --hh-radius: 8px;
+}
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: var(--hh-font-mono);
+  font-size: 0.92rem;
+  background: var(--hh-bg);
+  color: var(--hh-ink);
+  line-height: 1.75;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-bg);
+}
+
+a {
+  color: var(--hh-ink);
+  text-decoration: none;
+}
+
+/* ---- Header ---- */
+.hh-header {
+  border-bottom: 1px solid var(--hh-border);
+}
+
+.hh-header__inner {
+  max-width: var(--hh-max-width);
+  margin: 0 auto;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hh-wordmark {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.hh-wordmark::before {
+  content: '~/';
+  color: var(--hh-accent);
+}
+
+.hh-wordmark::after {
+  content: '▍';
+  color: var(--hh-accent);
+  animation: hh-blink 1.2s steps(1) infinite;
+}
+
+@keyframes hh-blink { 50% { opacity: 0; } }
+
+/* ---- Breadcrumb wordmark for tool sites: ~/houlahop/<tool>▍ ---- */
+.hh-crumbs {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.hh-crumbs a {
+  color: var(--hh-ink);
+}
+
+.hh-crumbs a:hover {
+  color: var(--hh-accent);
+}
+
+.hh-crumbs a:first-child::before {
+  content: '~/';
+  color: var(--hh-accent);
+}
+
+.hh-crumbs .hh-sep {
+  color: var(--hh-muted);
+}
+
+.hh-crumbs::after {
+  content: '▍';
+  color: var(--hh-accent);
+  animation: hh-blink 1.2s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hh-crumbs::after { animation: none; }
+}
+
+.hh-nav {
+  display: flex;
+  gap: 24px;
+  font-size: 0.8rem;
+}
+
+.hh-nav a {
+  color: var(--hh-muted);
+  transition: color 0.15s;
+}
+
+.hh-nav a:hover {
+  color: var(--hh-ink);
+}
+
+/* ---- Hero (mission statement, if used) ---- */
+.hh-hero {
+  max-width: var(--hh-max-width);
+  margin: 0 auto;
+  padding: 80px 24px 56px;
+  text-align: center;
+}
+
+.hh-hero h1 {
+  font-size: clamp(1.5rem, 3.5vw, 2.1rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  max-width: 26ch;
+  margin: 0 auto;
+}
+
+.hh-hero__sub {
+  margin: 20px auto 0;
+  max-width: 58ch;
+  color: var(--hh-muted);
+}
+
+/* ---- Homepage project entries ---- */
+.hh-entry {
+  padding: 44px 0 4px;
+}
+
+.hh-entry h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.hh-entry h2 a {
+  color: inherit;
+}
+
+.hh-entry h2 a::before {
+  content: '$ ';
+  color: var(--hh-accent);
+}
+
+.hh-entry h2 a:hover {
+  color: var(--hh-accent);
+}
+
+.hh-entry__lead {
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.hh-entry p {
+  margin-bottom: 12px;
+  max-width: var(--hh-measure);
+}
+
+.hh-entry p:not(.hh-entry__lead) {
+  color: var(--hh-muted);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--hh-border);
+  margin: 36px 0 0;
+}
+
+/* ---- Capability cards (if used) ---- */
+.hh-cards {
+  max-width: var(--hh-max-width);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.hh-card {
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+
+.hh-card:hover {
+  border-color: var(--hh-border-strong);
+}
+
+.hh-card h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.hh-card__project {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--hh-accent);
+}
+
+.hh-card__desc {
+  font-size: 0.85rem;
+  color: var(--hh-muted);
+  flex: 1;
+}
+
+.hh-card__more {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--hh-accent);
+}
+
+.hh-card__more:hover {
+  text-decoration: underline;
+}
+
+/* ---- Capability page ---- */
+.hh-page {
+  width: 100%;
+  max-width: var(--hh-max-width);
+  margin: 0 auto;
+  padding: 0 24px;
+  flex: 1;
+}
+
+.hh-page-hero {
+  padding: 64px 0 12px;
+}
+
+.hh-page-hero .hh-card__project {
+  display: block;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin-bottom: 10px;
+}
+
+.hh-page-hero h1 {
+  font-size: clamp(1.3rem, 3vw, 1.7rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+
+.hh-page-hero__summary {
+  margin-top: 14px;
+  color: var(--hh-muted);
+  max-width: 52ch;
+}
+
+.hh-section {
+  padding: 36px 0 4px;
+}
+
+.hh-section__label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--hh-faint);
+  letter-spacing: 0.08em;
+}
+
+.hh-section h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 4px 0 14px;
+}
+
+.hh-section h2::before {
+  content: '# ';
+  color: var(--hh-accent);
+}
+
+.hh-section p {
+  margin-bottom: 14px;
+  max-width: var(--hh-measure);
+}
+
+.hh-section p a,
+.hh-section li a {
+  color: var(--hh-accent);
+}
+
+.hh-section p a:hover,
+.hh-section li a:hover {
+  text-decoration: underline;
+}
+
+.hh-section ul {
+  list-style: none;
+  margin-bottom: 14px;
+}
+
+.hh-section li {
+  padding-left: 22px;
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.hh-section li::before {
+  content: '-';
+  position: absolute;
+  left: 0;
+  color: var(--hh-accent);
+}
+
+/* ---- Code ---- */
+code {
+  font-family: var(--hh-font-mono);
+  font-size: 0.88em;
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  word-break: break-word;
+}
+
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: 0.82rem;
+  line-height: 1.7;
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: 16px 20px;
+  overflow-x: auto;
+  margin: 16px 0 20px;
+}
+
+pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+pre .prompt { color: var(--hh-accent); user-select: none; }
+pre .comment { color: var(--hh-faint); }
+
+/* ---- Footer ---- */
+.hh-footer {
+  margin-top: 72px;
+  border-top: 1px solid var(--hh-border);
+}
+
+.hh-footer__inner {
+  max-width: var(--hh-max-width);
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--hh-faint);
+}
+
+.hh-footer a {
+  color: var(--hh-muted);
+}
+
+.hh-footer a:hover {
+  color: var(--hh-accent);
+}
+
+/* ---- Responsive / motion ---- */
+@media (max-width: 640px) {
+  .hh-hero { padding: 56px 24px 40px; }
+  .hh-page-hero { padding: 44px 0 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hh-wordmark::after { animation: none; }
+}

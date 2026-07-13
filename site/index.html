@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mdio — humans and agents editing the same markdown, live</title>
+  <meta name="description" content="Turn a folder of markdown into live collaborative documents. Humans get a web editor, AI agents join over MCP — same doc, named cursors, no lost edits.">
+  <meta property="og:title" content="mdio — humans and agents editing the same markdown, live">
+  <meta property="og:description" content="Turn a folder of markdown into live collaborative documents. Humans get a web editor, AI agents join over MCP — same doc, named cursors, no lost edits.">
+  <meta property="og:url" content="https://mdio.houlahop.com">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="houlahop.css?v=4">
+  <link rel="stylesheet" href="hh-terminal.css?v=1">
+  <style>
+    :root { --hh-accent: #a371f7; }
+
+    .hh-install-cmd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--hh-surface);
+      border: 1px solid var(--hh-border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 0.85rem;
+      margin: 16px 0 10px;
+    }
+
+    .hh-install-cmd code {
+      background: none;
+      border: none;
+      padding: 0;
+    }
+
+    .hh-install-cmd .prompt { color: var(--hh-accent); font-weight: 600; }
+
+    .hh-copy-btn {
+      font-family: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--hh-muted);
+      background: none;
+      border: 1px solid var(--hh-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .hh-copy-btn:hover { color: var(--hh-ink); border-color: var(--hh-border-strong); }
+    .hh-copy-btn.copied { color: var(--hh-accent); border-color: var(--hh-accent); }
+
+    .hh-update-hint { font-size: 0.8rem; color: var(--hh-faint); }
+  </style>
+</head>
+<body>
+
+  <header class="hh-header">
+    <div class="hh-header__inner">
+      <span class="hh-crumbs"><a href="https://houlahop.com">houlahop</a><span class="hh-sep">/</span><a href="/">mdio</a></span>
+      <nav class="hh-nav">
+        <a href="https://github.com/plosson/mdio" target="_blank" rel="noopener">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="hh-page">
+
+    <section class="hh-page-hero">
+      <span class="hh-card__project">mdio</span>
+      <h1>Your agent edits the same markdown you do — live, cursor and all.</h1>
+      <p class="hh-page-hero__summary">A folder of markdown becomes collaborative documents. Humans get a web editor, agents join over MCP as named peers — same doc, visible cursors, no lost edits.</p>
+    </section>
+
+    <div class="hh-term">
+      <div class="hh-term-bar"><span class="hh-term-dot"></span><span class="hh-term-dot"></span><span class="hh-term-dot"></span></div>
+      <pre class="hh-term-body" data-hh-terminal></pre>
+    </div>
+
+    <section class="hh-section">
+      <span class="hh-section__label">01</span>
+      <h2>Install</h2>
+      <p>mdio is a server you run on your own docs — and every mdio server ships its own client, so the binary always matches the server it talks to.</p>
+      <div class="hh-install-cmd">
+        <code><span class="prompt">$</span> git clone https://github.com/plosson/mdio && cd mdio && bun run start</code>
+        <button class="hh-copy-btn" onclick="copyCommand(this, 'git clone https://github.com/plosson/mdio && cd mdio && bun run start')">Copy</button>
+      </div>
+      <div class="hh-install-cmd">
+        <code><span class="prompt">$</span> curl -fsSL http://localhost:4321/install.sh | sh</code>
+        <button class="hh-copy-btn" onclick="copyCommand(this, 'curl -fsSL http://localhost:4321/install.sh | sh')">Copy</button>
+      </div>
+      <p class="hh-update-hint">macOS (Apple Silicon), Linux and Windows (<code>irm &lt;server&gt;/install.ps1 | iex</code>). Already installed? Run <code>mdio update</code> — it self-updates from your server. A Dockerfile is included for running the server anywhere.</p>
+    </section>
+
+    <section class="hh-section">
+      <span class="hh-section__label">02</span>
+      <h2>The problem</h2>
+      <p>I kept writing documents <em>with</em> my agent the wrong way. It edits the file while I have it open; whoever saves last wins. I can't see what it's doing until it's done, it can't see what I just changed, and "collaborating" means taking turns on a file and diffing afterwards.</p>
+      <p>Files were never meant to be a shared workspace. There's no presence, no authorship, no way to point at a paragraph and say "fix this" — for me or for the agent.</p>
+    </section>
+
+    <section class="hh-section">
+      <span class="hh-section__label">03</span>
+      <h2>The solution</h2>
+      <p>mdio serves a folder of markdown as live collaborative documents over CRDTs. I write in a web editor with live cursors; agents connect over MCP as first-class peers — named presence, a visible cursor, and edits anchored to positions that survive concurrent changes, so nothing clobbers anything.</p>
+      <p>The files stay plain markdown on disk. Authorship, comment threads and edit history ride alongside in sidecars — line-level blame tells you which words the human wrote and which the agent did, and a replay slider shows how the document got there.</p>
+    </section>
+
+    <section class="hh-section">
+      <span class="hh-section__label">04</span>
+      <h2>When to use it</h2>
+      <p>Use mdio when you and your agents need to:</p>
+      <ul>
+        <li>Draft a document together and watch the agent write, in real time</li>
+        <li>Have an agent review a doc by leaving comments instead of rewriting it</li>
+        <li>Leave a comment mentioning the agent and have it pick the thread up</li>
+        <li>Let several agents write into the same document without merge conflicts</li>
+        <li>Keep authorship visible — who wrote which line, human or agent</li>
+      </ul>
+    </section>
+
+    <section class="hh-section">
+      <span class="hh-section__label">05</span>
+      <h2>Features</h2>
+      <ul>
+        <li>Real-time collaborative editing over the standard y-websocket protocol (Yjs)</li>
+        <li>Web editor with remote cursors, author-attributed change highlights, markdown + mermaid preview</li>
+        <li>MCP server for agents: open, search, stepwise writing, one-shot replace — all anchored with relative positions that survive concurrent edits</li>
+        <li>Comment threads with ranges and @mentions; agents can open, answer and resolve them</li>
+        <li>Line-level blame and a full history replay slider per document</li>
+        <li>Plain markdown files stay the source of truth — the vault is just a folder</li>
+        <li>The server ships its own client: <code>curl &lt;server&gt;/install.sh | sh</code> installs the <code>mdio</code> binary; <code>mdio mcp install</code> and <code>mdio skill install</code> wire up a project in seconds</li>
+      </ul>
+    </section>
+
+    <section class="hh-section">
+      <span class="hh-section__label">06</span>
+      <h2>Source</h2>
+      <p>Source, documentation, and examples: <a href="https://github.com/plosson/mdio">github.com/plosson/mdio</a></p>
+    </section>
+
+  </main>
+
+  <footer class="hh-footer">
+    <div class="hh-footer__inner">
+      <span>a <a href="https://houlahop.com">houlahop</a> tool</span>
+      <span>© 2026 · MIT · <a href="https://github.com/plosson/mdio">GitHub</a></span>
+    </div>
+  </footer>
+
+  <script>
+    function copyCommand(btn, text) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied';
+        btn.classList.add('copied');
+        setTimeout(function () {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    window.hhTerminalFrames = [
+      {
+        cmd: "bun run start ./docs",
+        output: [
+          "mdio serving ./docs",
+          "Web UI:  http://localhost:4321",
+        ],
+      },
+      {
+        cmd: "curl -fsSL http://localhost:4321/install.sh | sh",
+        output: [
+          "Downloading mdio (darwin-arm64) ...",
+          "Installed mdio to ~/.local/bin/mdio",
+        ],
+      },
+      {
+        cmd: "mdio mcp install --server http://localhost:4321 --username plosson/claude",
+        output: [
+          "Updated ./.mcp.json",
+          "  mdio → mdio mcp  (server http://localhost:4321, user plosson/claude)",
+        ],
+      },
+      {
+        cmd: 'claude "review docs/plan.md and comment on anything unclear"',
+        output: [
+          "⏺ open_document docs/plan.md — joined as plosson/claude",
+          '⏺ add_comment "Rollout" — the two-week estimate ignores the data migration',
+          "✔ 3 comments left — they appear live in the web editor",
+        ],
+      },
+    ];
+  </script>
+  <script src="hh-terminal.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+#!/bin/sh
+# mdio installer.
+# Usage: curl -LsSf https://mdio.houlahop.com/install | sh
+#
+# mdio's client is shipped by the mdio server itself, so the binary you
+# install always matches the server it talks to. There is nothing to
+# download from here — install from your own server instead.
+
+set -e
+
+echo "mdio installs from your own mdio server, not from this site."
+echo ""
+echo "1. Run a server on a folder of markdown:"
+echo "     git clone https://github.com/plosson/mdio && cd mdio && bun run start"
+echo ""
+echo "2. Install the client it ships:"
+echo "     curl -fsSL http://localhost:4321/install.sh | sh"
+echo ""
+echo "Docs: https://github.com/plosson/mdio"
+exit 1
