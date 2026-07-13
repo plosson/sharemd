@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "sharemd": {
+      "command": "bun",
+      "args": [
+        "run",
+        "src/mcp/index.ts"
+      ],
+      "env": {
+        "SHAREMD_SERVER": "http://localhost:4321",
+        "SHAREMD_USERNAME": "plosson/claude"
+      }
+    }
+  }
+}
