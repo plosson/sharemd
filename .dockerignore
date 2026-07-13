@@ -1,0 +1,8 @@
+node_modules/
+.sharemd/
+.git/
+.idea/
+.env
+vault/
+tests/
+*.log
