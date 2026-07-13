@@ -12,6 +12,10 @@ cursor, anchored edits).
 - `bun run test:e2e` — Playwright e2e: two MCP agents + a browser editing concurrently
 - `bun run test:all` — everything
 - `bun run mcp` — the stdio MCP entrypoint (normally launched by an MCP host, not by hand)
+- `bun run cli` — the `sharemd` client CLI in dev (`version`, `help`, `mcp`, `mcp install`,
+  `skill install`, `update`)
+- `bun run build:cli` — cross-compile standalone `sharemd` binaries for every entry in
+  `src/cli/platforms.ts` into `dist/cli/` (one host builds all platforms; no native deps)
 
 Tests are self-contained: each spawns its own server on an ephemeral port with a temp vault.
 
@@ -34,8 +38,26 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   `begin_edit` / `append_text` / `commit_edit` / `abort_edit`; `replace_text` for one-shot
   search+replace; comment tools (`add_comment` … `delete_comment`, `list_comments` with a
   `mentioning` filter).
+- `src/cli/` — the `sharemd` client CLI compiled to standalone binaries. Its editing
+  surface IS the MCP (`sharemd mcp` runs `runMcp()`; the MCP host keeps the process
+  alive); the rest are one-shot installers: `mcp install` merge-writes the sharemd entry
+  into `./.mcp.json`, `skill install` writes the bundled skill (inlined from
+  `skills/sharemd/SKILL.md` at compile time) to `.claude/skills/sharemd/`, `update`
+  self-updates by re-running the server's install script. `platforms.ts` is the registry
+  driving the build script, download routes, and install scripts.
+- `src/server/cli-routes.ts` — the server ships its own client: `GET /install.sh` (and
+  `.ps1`) render an installer templated with the caller-visible origin (reverse-proxy
+  aware), `/api/cli` lists platforms, `/api/cli/version` backs update checks, and
+  `/api/cli/<platform>` streams binaries from `dist/cli` (baked in by the Dockerfile's
+  `cli` stage; `SHAREMD_CLI_DIST` overrides the directory).
+- `skills/sharemd/SKILL.md` — the canonical Claude skill teaching when/how to use the
+  MCP tools (routing rule, workflows, concurrency discipline); versioned with the tool
+  surface it documents.
 - `tests/` — `helpers.ts` (test server + raw Yjs peers), `mcp-client.ts` (scripted MCP
-  host over real stdio), plus server/MCP/model/e2e suites.
+  host over real stdio), plus server/MCP/model/CLI/e2e suites. `cli.test.ts` compiles a
+  real binary and runs the full install → update → MCP-peer loop against a live server
+  (use async `Bun.spawn` there — `spawnSync` deadlocks children talking to the
+  in-process server).
 
 ## Invariants
 
@@ -63,6 +85,16 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 - The MCP process must keep stdout clean (protocol channel) — diagnostics go to stderr.
 
 ## MCP config for an agent
+
+Easiest — install the binary from a running server, then wire the project:
+
+```sh
+curl -fsSL http://localhost:4321/install.sh | sh
+sharemd mcp install --server http://localhost:4321 --username plosson/claude
+sharemd skill install
+```
+
+Or by hand (e.g. from a checkout, without the binary):
 
 ```json
 {
