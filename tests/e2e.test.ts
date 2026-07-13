@@ -144,6 +144,41 @@ test(
 );
 
 test(
+  'history mode replays the edit log: scrub back to the seed, play forward again',
+  async () => {
+    await page.click('#history-open');
+    await page.waitForSelector('#history:not([hidden])');
+    expect(await page.textContent('#history-title')).toBe('demo.md — history');
+
+    // Opens at the latest entry: everything everyone wrote is there.
+    await waitForText('#history-editor .cm-content', 'BOB: appended a closing line.');
+    const total = Number(await page.locator('#history-slider').getAttribute('max'));
+    expect(total).toBeGreaterThan(1);
+
+    // Scrub to the first entry: the pre-edit document, no live contributions.
+    await page.locator('#history-slider').evaluate((el) => {
+      (el as HTMLInputElement).value = '1';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await waitForText('#history-editor .cm-content', '# Demo document');
+    const seeded = await page.textContent('#history-editor .cm-content');
+    expect(seeded).not.toInclude('HUMAN: typed live from the browser');
+
+    // Play steps forward through the log.
+    await page.click('#history-play');
+    await page.waitForFunction(
+      () => Number(document.querySelector('#history-pos')?.textContent?.split('/')[0]) >= 4,
+      undefined,
+      { timeout: 10_000 },
+    );
+    await page.click('#history-play'); // pause
+    await page.click('#history-close');
+    await page.waitForSelector('#history', { state: 'hidden' });
+  },
+  30_000,
+);
+
+test(
   'first visit asks who you are, rejects "/", remembers the name, and logout forgets it',
   async () => {
     const context = await browser.newContext();

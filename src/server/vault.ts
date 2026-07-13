@@ -1,5 +1,5 @@
-import { readdir } from 'node:fs/promises';
-import { join, normalize, resolve, sep } from 'node:path';
+import { appendFile, mkdir, readdir } from 'node:fs/promises';
+import { dirname, join, normalize, resolve, sep } from 'node:path';
 
 const EDITABLE_EXTENSIONS = ['.md', '.markdown', '.txt'];
 
@@ -60,6 +60,34 @@ export class Vault {
 
   async writeState(docPath: string, state: Uint8Array): Promise<void> {
     await Bun.write(this.stateFile(docPath), state);
+  }
+
+  /** Absolute path of the append-only update log mirroring a document path under STATE_DIR. */
+  private logFile(docPath: string): string {
+    const relative = this.resolvePath(docPath).slice(this.root.length + 1);
+    return join(this.root, STATE_DIR, `${relative}.log`);
+  }
+
+  /** Raw NDJSON history log ("" when absent) — one {ts, update} entry per line. */
+  async readLog(docPath: string): Promise<string> {
+    const file = Bun.file(this.logFile(docPath));
+    if (!(await file.exists())) {
+      return '';
+    }
+    return file.text();
+  }
+
+  async appendLog(docPath: string, ts: number, update: Uint8Array): Promise<void> {
+    const line = `${JSON.stringify({ ts, update: Buffer.from(update).toString('base64') })}\n`;
+    const path = this.logFile(docPath);
+    await mkdir(dirname(path), { recursive: true });
+    await appendFile(path, line);
+  }
+
+  /** Restart the log with a single full-state entry (fresh doc, or unusable existing log). */
+  async resetLog(docPath: string, ts: number, state: Uint8Array): Promise<void> {
+    const line = `${JSON.stringify({ ts, update: Buffer.from(state).toString('base64') })}\n`;
+    await Bun.write(this.logFile(docPath), line);
   }
 
   async list(): Promise<string[]> {

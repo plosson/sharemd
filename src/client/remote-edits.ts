@@ -180,11 +180,23 @@ function addedRangesByAuthor(
   return ranges;
 }
 
-export function wireRemoteEdits(
+export interface EditAuthor {
+  name?: string;
+  color?: string;
+  colorLight?: string;
+}
+
+/**
+ * Flash author-attributed highlights for edits applied to `ytext` by clients
+ * other than `ownClient`. Attaches immediately; identity comes from the given
+ * resolver, so live views resolve via awareness and replays via the doc's
+ * authors map.
+ */
+export function wireEditHighlights(
   view: EditorView,
   ytext: Y.Text,
-  provider: WebsocketProvider,
   ownClient: number,
+  resolveAuthor: (client: number) => EditAuthor | undefined,
 ): () => void {
   let seq = 0;
   const timers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -214,12 +226,10 @@ export function wireRemoteEdits(
     const entries = view.state.field(highlightField);
     const effects = [];
     for (const range of ranges) {
-      const state = provider.awareness.getStates().get(range.client) as
-        | { user?: { name?: string; color?: string; colorLight?: string } }
-        | undefined;
-      const name = state?.user?.name ?? 'someone';
-      const color = state?.user?.color ?? '#7a7a7a';
-      const colorLight = state?.user?.colorLight ?? `${color}33`;
+      const author = resolveAuthor(range.client);
+      const name = author?.name ?? 'someone';
+      const color = author?.color ?? '#7a7a7a';
+      const colorLight = author?.colorLight ?? `${color}33`;
       const existing = entries.find(
         (entry) =>
           entry.client === range.client &&
@@ -251,14 +261,31 @@ export function wireRemoteEdits(
     }
   };
 
+  ytext.observe(observer);
+
+  return () => {
+    ytext.unobserve(observer);
+    for (const timer of timers.values()) {
+      clearTimeout(timer);
+    }
+    timers.clear();
+  };
+}
+
+export function wireRemoteEdits(
+  view: EditorView,
+  ytext: Y.Text,
+  provider: WebsocketProvider,
+  ownClient: number,
+): () => void {
+  const resolveAuthor = (client: number) =>
+    (provider.awareness.getStates().get(client) as { user?: EditAuthor } | undefined)?.user;
+
   // Attach only once the initial sync is done, so hydrating the document
   // content doesn't flash as one giant "edit".
-  let attached = false;
+  let detach: (() => void) | null = null;
   const attach = () => {
-    if (!attached) {
-      attached = true;
-      ytext.observe(observer);
-    }
+    detach ??= wireEditHighlights(view, ytext, ownClient, resolveAuthor);
   };
   if (provider.synced) {
     attach();
@@ -273,12 +300,6 @@ export function wireRemoteEdits(
   }
 
   return () => {
-    if (attached) {
-      ytext.unobserve(observer);
-    }
-    for (const timer of timers.values()) {
-      clearTimeout(timer);
-    }
-    timers.clear();
+    detach?.();
   };
 }

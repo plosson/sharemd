@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { yCollab } from 'y-codemirror.next';
 import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
+import { closeHistory, openHistory } from './history';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
 const PALETTE = [
@@ -96,6 +97,13 @@ let current: {
   doc: Y.Doc;
   cleanup: () => void;
 } | null = null;
+let currentPath: string | null = null;
+
+document.querySelector('#history-open')!.addEventListener('click', () => {
+  if (currentPath) {
+    void openHistory(currentPath);
+  }
+});
 
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
@@ -113,6 +121,8 @@ function renderPresence(provider: WebsocketProvider) {
 }
 
 function openDocument(path: string) {
+  closeHistory();
+  currentPath = path;
   if (current) {
     current.cleanup();
     current.view.destroy();

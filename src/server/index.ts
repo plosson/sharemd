@@ -66,6 +66,21 @@ export async function startServer({
         return new Response('WebSocket upgrade required', { status: 426 });
       }
 
+      if (url.pathname.startsWith('/api/history/')) {
+        const docPath = decodeURIComponent(url.pathname.slice('/api/history/'.length));
+        try {
+          const room = await registry.open(docPath);
+          await room.flushLog();
+          return new Response(await vault.readLog(docPath), {
+            headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+          });
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : 'Invalid document', {
+            status: 400,
+          });
+        }
+      }
+
       if (url.pathname.startsWith('/api/blame/')) {
         const docPath = decodeURIComponent(url.pathname.slice('/api/blame/'.length));
         try {

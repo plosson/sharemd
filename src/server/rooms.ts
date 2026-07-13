@@ -64,6 +64,9 @@ export class Room {
   private lastPersisted: string | null = null;
   private stateDirty = false;
   private persistChain: Promise<void> = Promise.resolve();
+  /** Off until hydration settles so the initial state application isn't logged twice. */
+  private logEnabled = false;
+  private logChain: Promise<void> = Promise.resolve();
 
   private constructor(
     readonly name: string,
@@ -78,6 +81,9 @@ export class Room {
       syncProtocol.writeUpdate(encoder, update);
       this.broadcast(encoding.toUint8Array(encoder));
       this.stateDirty = true;
+      if (this.logEnabled) {
+        this.appendToLog(update);
+      }
       if (origin !== HYDRATE_ORIGIN) {
         this.schedulePersist();
       }
@@ -117,6 +123,14 @@ export class Room {
       }
     }
 
+    // A log is only replayable when it shares history with the doc we hydrated;
+    // a rebuilt doc (no/corrupt sidecar) would double content on replay, so the
+    // log restarts from a full-state seed instead.
+    const logUsable = hydratedFromState && (await vault.readLog(name)) !== '';
+    if (logUsable) {
+      room.logEnabled = true; // capture the disk reconcile below as a history entry
+    }
+
     // The markdown file stays the source of truth for content; the sidecar only
     // contributes history. Any divergence (offline edit, deleted file, corrupt
     // sidecar) is reconciled as a minimal "disk"-authored edit.
@@ -131,7 +145,25 @@ export class Room {
       }
       room.lastPersisted = content;
     }
+
+    if (!logUsable) {
+      await vault.resetLog(name, Date.now(), Y.encodeStateAsUpdate(room.doc));
+      room.logEnabled = true;
+    }
     return room;
+  }
+
+  private appendToLog(update: Uint8Array): void {
+    this.logChain = this.logChain
+      .then(() => this.vault.appendLog(this.name, Date.now(), update))
+      .catch((error) => {
+        console.error(`sharemd: failed to append history log for "${this.name}":`, error);
+      });
+  }
+
+  /** Settle pending history log appends (so readers see everything broadcast so far). */
+  flushLog(): Promise<void> {
+    return this.logChain;
   }
 
   get connectionCount(): number {
@@ -245,6 +277,7 @@ export class Room {
       this.persistTimer = null;
     }
     await this.persist();
+    await this.logChain;
   }
 }
 
