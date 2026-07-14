@@ -116,6 +116,25 @@ export class AgentRuntime {
     return response.json();
   }
 
+  /**
+   * Full-text search across every document in the project — a way to locate the
+   * right document before opening it. Hits the server directly; opens nothing.
+   */
+  async searchProject(query: string, maxResults: number): Promise<unknown> {
+    const params = new URLSearchParams({ q: query, limit: String(maxResults) });
+    const response = await fetch(
+      `${this.serverHttpBase}/api/projects/${encodeURIComponent(this.project)}/search?${params}`,
+    );
+    if (!response.ok) {
+      const detail =
+        response.status === 404
+          ? `project "${this.project}" does not exist on the server`
+          : `HTTP ${response.status}`;
+      throw new Error(`Failed to search project: ${detail}`);
+    }
+    return response.json();
+  }
+
   async openDocument(path: string): Promise<{ path: string; charCount: number }> {
     const vaultPath = this.vaultPath(path);
     const relative = this.relativePath(vaultPath);

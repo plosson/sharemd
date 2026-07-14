@@ -64,6 +64,19 @@ export function deleteDoc(docPath: string): Promise<void> {
   return api('DELETE', docApiUrl(docPath));
 }
 
+/** A full-text search hit within a project (doc path is project-relative). */
+export interface SearchMatch {
+  doc: string;
+  line: number;
+  column: number;
+  snippet: string;
+}
+
+export async function searchProject(project: string, query: string): Promise<SearchMatch[]> {
+  const url = `/api/projects/${encodeURIComponent(project)}/search?q=${encodeURIComponent(query)}`;
+  return (await api<{ matches: SearchMatch[] }>('GET', url)).matches;
+}
+
 /** A named version of a document (metadata only; the CRDT state stays server-side). */
 export interface Snapshot {
   id: string;

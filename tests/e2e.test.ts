@@ -673,3 +673,22 @@ test(
   },
   60_000,
 );
+
+test(
+  'project search finds a document by its content and opens it',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+
+    await page.fill('#doc-search', 'First note');
+    await page.waitForSelector('#search-results:not([hidden]) .search-hit');
+    expect(await page.textContent('#search-results .search-hit')).toInclude('demo.md');
+
+    // Clicking a hit opens that document and dismisses the results.
+    await page.click('#search-results .search-hit');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    await page.waitForSelector('#search-results', { state: 'hidden' });
+    expect(await page.inputValue('#doc-search')).toBe('');
+  },
+  30_000,
+);

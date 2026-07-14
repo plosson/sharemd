@@ -119,6 +119,78 @@ document.querySelector('#versions-open')!.addEventListener('click', () => {
   }
 });
 
+const docSearch = document.querySelector('#doc-search')! as HTMLInputElement;
+const searchResults = document.querySelector('#search-results')!;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearSearch() {
+  docSearch.value = '';
+  searchResults.innerHTML = '';
+  searchResults.hidden = true;
+  docList.hidden = false;
+}
+
+async function runSearch(query: string): Promise<void> {
+  const trimmed = query.trim();
+  if (!currentProject || !trimmed) {
+    searchResults.hidden = true;
+    searchResults.innerHTML = '';
+    docList.hidden = false;
+    return;
+  }
+  let matches: api.SearchMatch[];
+  try {
+    matches = await api.searchProject(currentProject, trimmed);
+  } catch {
+    return;
+  }
+  // A slower query can resolve after the box changed — ignore stale results.
+  if (docSearch.value.trim() !== trimmed) {
+    return;
+  }
+  docList.hidden = true;
+  searchResults.hidden = false;
+  searchResults.innerHTML = '';
+  if (matches.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'search-empty';
+    empty.textContent = 'No matches.';
+    searchResults.appendChild(empty);
+    return;
+  }
+  for (const match of matches) {
+    const full = `${currentProject}/${match.doc}`;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'search-hit';
+    const where = document.createElement('span');
+    where.className = 'search-where';
+    where.textContent = `${match.doc}:${match.line}`;
+    const snip = document.createElement('span');
+    snip.className = 'search-snippet';
+    snip.textContent = match.snippet;
+    row.append(where, snip);
+    row.addEventListener('click', () => {
+      clearSearch();
+      openDocument(full);
+    });
+    searchResults.appendChild(row);
+  }
+}
+
+docSearch.addEventListener('input', () => {
+  const query = docSearch.value;
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+  }
+  searchTimer = setTimeout(() => void runSearch(query), 200);
+});
+docSearch.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    clearSearch();
+  }
+});
+
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
   for (const state of provider.awareness.getStates().values()) {
@@ -288,6 +360,7 @@ function renderDocList() {
 
 async function loadProject(project: string | null): Promise<void> {
   currentProject = project;
+  clearSearch();
   docs = project ? (await api.listDocs(project)).map((rel) => `${project}/${rel}`) : [];
   renderProjectSelect();
   renderDocList();

@@ -67,6 +67,19 @@ export async function runMcp(): Promise<void> {
   );
 
   server.registerTool(
+    'search_project',
+    {
+      description:
+        'Search the full text of every document in your project and get back the matching documents with line numbers and snippets — without opening anything. Use it to find the right document before open_document. Case-insensitive substring match, one hit per line. (search_text, by contrast, searches only the currently open document.)',
+      inputSchema: {
+        query: z.string().min(1),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    ({ query, maxResults }) => respond(() => runtime.searchProject(query, maxResults ?? 20)),
+  );
+
+  server.registerTool(
     'open_document',
     {
       description:

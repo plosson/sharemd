@@ -6,6 +6,7 @@
 //   PATCH  /api/projects/:p         {name}        rename a project
 //   DELETE /api/projects/:p                       delete a project (docs included)
 //   GET    /api/projects/:p/mentions   ?who&open  open threads @mentioning a peer (all docs)
+//   GET    /api/projects/:p/search     ?q&limit   full-text search across the project
 //   GET    /api/projects/:p/docs                  list documents (project-relative)
 //   POST   /api/projects/:p/docs    {path}        create an empty document
 //   PATCH  /api/projects/:p/docs/*d {project?, path?}  rename / move a document
@@ -165,6 +166,57 @@ async function collectMentions(
   return entries.sort((a, b) => a.request.createdAt - b.request.createdAt);
 }
 
+interface SearchMatch {
+  /** Project-relative document path. */
+  doc: string;
+  line: number;
+  column: number;
+  snippet: string;
+}
+
+const SNIPPET_PAD = 30;
+
+/** A trimmed window of `line` around the match, elided on either side when clipped. */
+function makeSnippet(line: string, col: number, len: number): string {
+  const start = Math.max(0, col - SNIPPET_PAD);
+  const end = Math.min(line.length, col + len + SNIPPET_PAD);
+  return `${start > 0 ? '…' : ''}${line.slice(start, end).trim()}${end < line.length ? '…' : ''}`;
+}
+
+/**
+ * Case-insensitive substring search across a project's documents. Reads the live
+ * room for open documents (freshest) and the markdown file for the rest (the
+ * canonical source of truth — unsaved keystrokes in an unopened doc can't exist).
+ * One match per line; stops at `maxResults`.
+ */
+async function searchProject(
+  vault: Vault,
+  registry: RoomRegistry,
+  project: string,
+  query: string,
+  maxResults: number,
+): Promise<SearchMatch[]> {
+  const needle = query.toLowerCase();
+  const docs = await vault.listDocs(project);
+  const matches: SearchMatch[] = [];
+  for (const rel of docs) {
+    const name = `${project}/${rel}`;
+    const open = await registry.peek(name)?.catch(() => null);
+    const content = open ? open.doc.getText(TEXT_KEY).toString() : (await vault.read(name)) ?? '';
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const col = lines[i]!.toLowerCase().indexOf(needle);
+      if (col >= 0) {
+        matches.push({ doc: rel, line: i + 1, column: col + 1, snippet: makeSnippet(lines[i]!, col, query.length) });
+        if (matches.length >= maxResults) {
+          return matches;
+        }
+      }
+    }
+  }
+  return matches;
+}
+
 /** Metadata view of a snapshot — the heavy `state` blob is never sent to clients. */
 function snapshotMeta({ state: _state, ...meta }: StoredSnapshot): Omit<StoredSnapshot, 'state'> {
   return meta;
@@ -295,6 +347,17 @@ export async function handleProjectsApi(
     const includeHandled = url.searchParams.get('open') === 'false';
     const mentions = await collectMentions(vault, registry, project, who, includeHandled);
     return Response.json({ project, who, mentions });
+  }
+
+  // /api/projects/:p/search?q=<text>&limit=<n> — full text across the project.
+  if (segments[3] === 'search' && segments.length === 4) {
+    if (req.method !== 'GET') {
+      return methodNotAllowed();
+    }
+    const query = requireString(url.searchParams.get('q'), 'q');
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+    const matches = await searchProject(vault, registry, project, query, limit);
+    return Response.json({ project, query, matches });
   }
 
   if (segments[3] !== 'docs') {

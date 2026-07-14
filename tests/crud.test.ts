@@ -346,3 +346,30 @@ describe('document snapshots', () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe('project search', () => {
+  test('searches on-disk content, stays within the project, reports line + snippet', async () => {
+    await apiCreateDoc(server, 'searchp/one.md');
+    await Bun.write(join(vaultDir, 'searchp', 'one.md'), '# Title\n\nplease FINDME on disk\n');
+    // A different project with the same term must not leak into the results.
+    await apiCreateDoc(server, 'searchq/two.md');
+    await Bun.write(join(vaultDir, 'searchq', 'two.md'), 'FINDME elsewhere\n');
+
+    const response = await call('GET', '/api/projects/searchp/search?q=findme');
+    expect(response.status).toBe(200);
+    const { matches } = (await response.json()) as {
+      matches: Array<{ doc: string; line: number; column: number; snippet: string }>;
+    };
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.doc).toBe('one.md');
+    expect(matches[0]!.line).toBe(3);
+    expect(matches[0]!.column).toBe(8); // 1-based column of "FINDME"
+    expect(matches[0]!.snippet).toInclude('FINDME');
+  });
+
+  test('missing query is 400; unknown project is 404', async () => {
+    await apiCreateDoc(server, 'searchp/y.md');
+    expect((await call('GET', '/api/projects/searchp/search')).status).toBe(400);
+    expect((await call('GET', '/api/projects/no-such-project/search?q=x')).status).toBe(404);
+  });
+});

@@ -76,11 +76,72 @@ body {
   background: #f0f0f0;
 }
 
+#doc-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 #doc-list {
   list-style: none;
   padding: 0;
   flex: 1;
   overflow-y: auto;
+}
+
+#search-results {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#search-results[hidden] {
+  display: none;
+}
+
+.search-empty {
+  color: #999;
+  font-size: 12px;
+  padding: 6px 2px;
+}
+
+.search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  background: #eee;
+}
+
+.search-where {
+  font-size: 11px;
+  color: #6a53d0;
+  font-weight: 500;
+}
+
+.search-snippet {
+  font-size: 11px;
+  color: #555;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 #me {

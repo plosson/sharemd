@@ -42,10 +42,13 @@ runs are silently lost or diverge. Always go through the mdio MCP tools.
 ## Workflows
 
 ### Orient
-1. `list_documents`, then `open_document(path)`.
+1. `list_documents` to see what exists; `search_project(query)` to find which document
+   contains something (full-text across the whole project, with line numbers — no need to
+   open each one). Then `open_document(path)`.
 2. `read_document` returns a window (default 6000 chars). For long documents, page with
    `startChar` until `endChar == charCount`.
 3. `blame_document` shows per-line authorship when you need to know who wrote what.
+`search_project` searches every document; `search_text` searches only the open one.
 
 ### Small targeted change
 - Preferred: `replace_text(query, replacement)` — one shot, no race window. The query

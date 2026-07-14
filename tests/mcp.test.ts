@@ -64,6 +64,7 @@ describe('mdio MCP', () => {
       'replace_text',
       'reply_comment',
       'resolve_comment',
+      'search_project',
       'search_text',
     ]);
   });
@@ -506,6 +507,40 @@ describe('mdio MCP', () => {
     } finally {
       watcher.destroy();
       await scribe.close();
+    }
+  });
+
+  test('search_project finds text across documents, case-insensitively, without opening them', async () => {
+    await apiCreateDoc(server, 'main/search-a.md');
+    await apiCreateDoc(server, 'main/search-b.md');
+    const writer = await AgentClient.spawn(server.url, 'plosson/erin');
+    try {
+      await writer.call('open_document', { path: 'search-a.md' });
+      await writer.call('insert_text', { text: '# Alpha\n\nThe UNIQUE_TERM lives here.\n' });
+      await writer.call('open_document', { path: 'search-b.md' });
+      await writer.call('insert_text', { text: '# Beta\n\nanother unique_term mention.\n' });
+
+      interface Hit {
+        doc: string;
+        line: number;
+        column: number;
+        snippet: string;
+      }
+      // The shared agent (alice) finds both without opening either document.
+      const { matches } = await eventually(
+        () => agent.call<{ matches: Hit[] }>('search_project', { query: 'UNIQUE_TERM' }),
+        (result) => result.matches.length >= 2,
+        'both matches to become searchable',
+      );
+      expect(matches.map((hit) => hit.doc).sort()).toEqual(['search-a.md', 'search-b.md']);
+      expect(matches.every((hit) => hit.snippet.toLowerCase().includes('unique_term'))).toBe(true);
+      expect(matches.find((hit) => hit.doc === 'search-a.md')!.line).toBe(3);
+
+      // A missing term yields nothing.
+      const none = await agent.call<{ matches: Hit[] }>('search_project', { query: 'NOT_ANYWHERE_XYZ' });
+      expect(none.matches).toEqual([]);
+    } finally {
+      await writer.close();
     }
   });
 
