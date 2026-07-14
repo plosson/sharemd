@@ -692,3 +692,36 @@ test(
   },
   30_000,
 );
+
+test(
+  'an agent proposes a suggested edit and the human accepts it in the browser',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+    await alice.call('open_document', { path: 'demo.md' });
+
+    // Alice adds a target word, then proposes replacing it — the text does not change.
+    await alice.call('place_cursor', { boundary: 'end' });
+    await alice.call('insert_text', { text: '\nSUGGEST_TARGET_WORD\n' });
+    await waitForText('.cm-content', 'SUGGEST_TARGET_WORD');
+    const { matches } = await alice.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+      query: 'SUGGEST_TARGET_WORD',
+    });
+    await alice.call('suggest_replace', { matchId: matches[0]!.matchId, text: 'REPLACED_WORD' });
+
+    // The human sees the suggestion panel, the inline highlight, and the proposal — text intact.
+    await page.waitForSelector('#suggestions-panel:not([hidden]) .suggest-card');
+    await page.waitForSelector('.mdio-suggest-replace');
+    expect(await page.textContent('#suggestions-panel')).toInclude('REPLACED_WORD');
+    expect(await page.textContent('.cm-content')).toInclude('SUGGEST_TARGET_WORD');
+
+    // Accepting applies the change and empties the panel.
+    await page.click('#suggestions-panel .suggest-btn.primary');
+    await page.waitForFunction(() => {
+      const text = document.querySelector('.cm-content')?.textContent ?? '';
+      return text.includes('REPLACED_WORD') && !text.includes('SUGGEST_TARGET_WORD');
+    });
+    await page.waitForSelector('#suggestions-panel', { state: 'hidden' });
+  },
+  30_000,
+);

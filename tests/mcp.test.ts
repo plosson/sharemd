@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { apiCreateDoc, connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
 import { parseUsername, resolveIdentity } from '../src/mcp/identity';
+import { acceptSuggestion, listSuggestions } from '../src/shared/suggestions';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -57,6 +58,7 @@ describe('mdio MCP', () => {
       'list_comments',
       'list_documents',
       'list_mentions',
+      'list_suggestions',
       'open_document',
       'place_cursor',
       'read_document',
@@ -66,6 +68,10 @@ describe('mdio MCP', () => {
       'resolve_comment',
       'search_project',
       'search_text',
+      'suggest_delete',
+      'suggest_insert',
+      'suggest_replace',
+      'withdraw_suggestion',
     ]);
   });
 
@@ -541,6 +547,56 @@ describe('mdio MCP', () => {
       expect(none.matches).toEqual([]);
     } finally {
       await writer.close();
+    }
+  });
+
+  test('an agent proposes a suggestion; a human accepts it and the agent sees the outcome', async () => {
+    await apiCreateDoc(server, 'main/review.md');
+    const human = await connectPeer(server, 'main/review.md');
+    const scribe = await AgentClient.spawn(server.url, 'plosson/grace');
+    try {
+      await scribe.call('open_document', { path: 'review.md' });
+      await scribe.call('insert_text', { text: 'The quick brown fox.\n' });
+      await waitFor(() => human.text.toString().includes('quick brown fox'), { label: 'seed to reach human' });
+
+      // Propose replacing "quick" — the text must NOT change yet.
+      const { matches } = await scribe.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+        query: 'quick',
+      });
+      const { suggestionId, quotedText } = await scribe.call<{ suggestionId: string; quotedText: string }>(
+        'suggest_replace',
+        { matchId: matches[0]!.matchId, text: 'nimble' },
+      );
+      expect(quotedText).toBe('quick');
+      await waitFor(() => listSuggestions(human.doc).some((s) => s.id === suggestionId), {
+        label: 'suggestion to reach the human',
+      });
+      expect(human.text.toString()).toInclude('quick brown fox'); // still pending, text untouched
+
+      // The human accepts it → the text changes for everyone.
+      acceptSuggestion(human.doc, suggestionId, 'plosson');
+      await waitFor(() => human.text.toString().includes('nimble brown fox'), { label: 'accept to apply' });
+
+      // The agent sees the resolved status and who resolved it.
+      const { suggestions } = await eventually(
+        () =>
+          scribe.call<{ suggestions: Array<{ id: string; status: string; resolvedBy: string | null }> }>(
+            'list_suggestions',
+            { includeResolved: true },
+          ),
+        (result) => result.suggestions.find((s) => s.id === suggestionId)?.status === 'accepted',
+        'agent to observe the accepted status',
+      );
+      expect(suggestions.find((s) => s.id === suggestionId)!.resolvedBy).toBe('plosson');
+
+      // Pending-only view no longer lists it.
+      const pending = await scribe.call<{ suggestions: Array<{ id: string }> }>('list_suggestions', {
+        includeResolved: false,
+      });
+      expect(pending.suggestions.map((s) => s.id)).not.toContain(suggestionId);
+    } finally {
+      human.destroy();
+      await scribe.close();
     }
   });
 

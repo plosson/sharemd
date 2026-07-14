@@ -980,3 +980,142 @@ body {
     opacity: 0.25;
   }
 }
+
+/* ── suggested edits ─────────────────────────────────────────────────── */
+
+#suggestions-panel {
+  width: 290px;
+  flex-shrink: 0;
+  border-left: 1px solid #ddd;
+  background: #fbfaff;
+  display: flex;
+  flex-direction: column;
+}
+
+#suggestions-panel[hidden] {
+  display: none;
+}
+
+#suggestions-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid #ddd;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#suggestions-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.suggest-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.suggest-card.focused {
+  border-color: #6a53d0;
+  box-shadow: 0 0 0 2px #6a53d033;
+}
+
+.suggest-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.suggest-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6a53d0;
+  font-weight: 600;
+}
+
+.suggest-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.suggest-add {
+  color: #1a7f37;
+}
+
+.suggest-del {
+  color: #b3261e;
+  text-decoration: line-through;
+}
+
+.suggest-orphan {
+  color: #999;
+  font-style: italic;
+}
+
+.suggest-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.suggest-btn {
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.suggest-btn:hover {
+  background: #eee;
+}
+
+.suggest-btn.primary {
+  background: #6a53d0;
+  border-color: #6a53d0;
+  color: #fff;
+}
+
+.suggest-btn.primary:hover {
+  background: #5a45b8;
+}
+
+.suggest-btn.subtle {
+  border: none;
+  color: #999;
+}
+
+/* inline decorations */
+.mdio-suggest-ghost {
+  color: #1a7f37;
+  background: #1a7f3714;
+  border-bottom: 1px dashed #1a7f3788;
+}
+
+.mdio-suggest-delete {
+  background: #b3261e18;
+  text-decoration: line-through;
+  text-decoration-color: #b3261e88;
+}
+
+.mdio-suggest-replace {
+  background: #6a53d018;
+  border-bottom: 2px solid #6a53d088;
+}
+
+.mdio-suggest-focused {
+  background: #6a53d033;
+}

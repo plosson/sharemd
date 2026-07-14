@@ -8,6 +8,7 @@ import { commentHighlightExtension, focusThread, setShowResolved, wireComments }
 import { setPreviewEnabled, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
 import { closeVersions, openVersions } from './versions';
+import { suggestionHighlightExtension, wireSuggestions } from './suggestions';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
 import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
@@ -289,6 +290,7 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
       yCollab(ytext, provider.awareness, { undoManager }),
       remoteEditExtension(),
       commentHighlightExtension(),
+      suggestionHighlightExtension(),
     ],
     parent: editorHost,
   });
@@ -296,10 +298,12 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
   const cleanupComments = wireComments(view, doc, user, (state) =>
     writeUrlState({ comment: state.comment, resolved: state.resolved }),
   );
+  const cleanupSuggestions = wireSuggestions(view, doc, user);
   const cleanupPreview = wirePreview(ytext, (enabled) => writeUrlState({ preview: enabled }));
   const cleanup = () => {
     cleanupRemoteEdits();
     cleanupComments();
+    cleanupSuggestions();
     cleanupPreview();
   };
 

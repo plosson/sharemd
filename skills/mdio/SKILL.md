@@ -80,6 +80,16 @@ active — commit or abort first.
    Mention peers with `@name` or `@owner/agent` in the body.
 3. Comment first; edit someone else's prose only when asked to.
 
+### Propose edits for review (suggesting mode)
+When a human wants to approve your wording before it lands, propose instead of writing:
+1. `search_text` to anchor, then `suggest_replace(matchId, text)`,
+   `suggest_delete(startMatchId, endMatchId)`, or `suggest_insert(text, matchId?, edge?)`.
+   The text does not change — the human sees your proposal inline and accepts or rejects it.
+2. `list_suggestions(includeResolved: true)` shows what happened to yours (status +
+   who resolved it); `withdraw_suggestion(id)` retracts one you no longer want.
+Accepting/rejecting is the human's call (web UI) — you propose, they decide. For edits
+you're trusted to make directly, use the normal edit tools instead.
+
 ### Respond to feedback addressed to you
 1. `list_mentions` is your work queue: it finds every open thread across the **whole
    project** that @mentions you — no document need be open. (Within one open document,

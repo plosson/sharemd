@@ -11,6 +11,13 @@ import {
   setResolved,
   type CommentThread,
 } from '../shared/comments';
+import {
+  addSuggestion,
+  deleteSuggestion,
+  listSuggestions,
+  suggestionAuthor,
+  type SuggestionView,
+} from '../shared/suggestions';
 
 /**
  * Editing runtime for one agent. Match handles and the cursor are stored as Yjs
@@ -479,6 +486,94 @@ export class AgentRuntime {
       deleteComment(session.doc, commentId);
     });
     return { deleted: commentId };
+  }
+
+  // ── suggestions (propose an edit for a human to accept/reject) ────────
+
+  /** Propose inserting text at a match edge, or at the cursor when no match is given. */
+  suggestInsert(text: string, input: { matchId?: string; edge?: 'start' | 'end' }): {
+    suggestionId: string;
+    at: number;
+  } {
+    const session = this.requireSession();
+    let index: number;
+    if (input.matchId) {
+      const { from, to } = this.resolveMatch(input.matchId);
+      index = (input.edge ?? 'start') === 'start' ? from : to;
+    } else {
+      index = this.cursorIndex();
+    }
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, {
+        author: this.identity.name,
+        kind: 'insert',
+        from: index,
+        to: index,
+        text,
+      });
+    });
+    return { suggestionId, at: index };
+  }
+
+  /** Propose replacing a matched range with new text. */
+  suggestReplace(matchId: string, text: string): { suggestionId: string; quotedText: string } {
+    const session = this.requireSession();
+    const { from, to } = this.resolveMatch(matchId);
+    const quotedText = this.text().slice(from, to);
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, { author: this.identity.name, kind: 'replace', from, to, text });
+    });
+    return { suggestionId, quotedText };
+  }
+
+  /** Propose deleting everything from the start of one match to the end of another. */
+  suggestDelete(startMatchId: string, endMatchId: string): { suggestionId: string; quotedText: string } {
+    const session = this.requireSession();
+    const startRange = this.resolveMatch(startMatchId);
+    const endRange = this.resolveMatch(endMatchId);
+    const from = Math.min(startRange.from, endRange.from);
+    const to = Math.max(startRange.to, endRange.to);
+    const quotedText = this.text().slice(from, to);
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, { author: this.identity.name, kind: 'delete', from, to, text: '' });
+    });
+    return { suggestionId, quotedText };
+  }
+
+  listSuggestions(input: { includeResolved?: boolean }): {
+    suggestions: Array<SuggestionView & { currentText: string | null }>;
+  } {
+    const session = this.requireSession();
+    const content = this.text();
+    let suggestions = listSuggestions(session.doc);
+    if (input.includeResolved === false) {
+      suggestions = suggestions.filter((suggestion) => suggestion.status === 'pending');
+    }
+    return {
+      suggestions: suggestions.map((suggestion) => ({
+        ...suggestion,
+        currentText:
+          suggestion.range && suggestion.kind !== 'insert'
+            ? content.slice(suggestion.range.from, suggestion.range.to)
+            : null,
+      })),
+    };
+  }
+
+  /** Withdraw a pending suggestion you authored (accept/reject is the human's call). */
+  withdrawSuggestion(suggestionId: string): { withdrawn: string } {
+    const session = this.requireSession();
+    const author = suggestionAuthor(session.doc, suggestionId);
+    if (author !== this.identity.name) {
+      throw new Error(`Only the author can withdraw a suggestion — this one is by "${author}".`);
+    }
+    session.transact(() => {
+      deleteSuggestion(session.doc, suggestionId);
+    });
+    return { withdrawn: suggestionId };
   }
 
   // ── stepwise edit sessions ───────────────────────────────────────────

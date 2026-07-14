@@ -38,7 +38,8 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   range highlights), `preview.ts` (markdown-it + mermaid pane), `history.ts` (replay
   slider), `url-state.ts` (doc/preview/comment state in the URL hash).
 - `src/shared/` — contracts both sides import: `blame.ts` (authorship), `comments.ts`
-  (comment threads, anchors, mentions).
+  (comment threads, anchors, mentions), `suggestions.ts` (proposed edits with
+  relative-position anchors: agents propose, humans accept/reject).
 - `src/mcp/` — stdio MCP (`@modelcontextprotocol/sdk`). `runtime.ts` is the editing
   runtime: search matches and the cursor are stored as **Yjs relative positions** so they
   survive concurrent edits (exact-text re-find as fallback). Stepwise writing via
@@ -70,9 +71,10 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 
 - The Y.Doc text key is `content`; the authorship map key is `authors` (clientID →
   identity, see `src/shared/blame.ts`); the comments map key is `comments` (threads with
-  relative-position anchors, see `src/shared/comments.ts`); the room name is the
-  vault-relative file path. All are shared contracts between server, client, and MCP —
-  change them everywhere or nowhere.
+  relative-position anchors, see `src/shared/comments.ts`); the suggestions map key is
+  `suggestions` (proposed edits, anchored the same way, see `src/shared/suggestions.ts`);
+  the room name is the vault-relative file path. All are shared contracts between server,
+  client, and MCP — change them everywhere or nowhere.
 - Every document lives inside a project: `vault/<project>/<doc-path>`, so the room name,
   the vault-relative path, and the web URL `/<project>/<doc-path>` are the same string.
   Project names cannot shadow server routes (`api`, `ws`, `app.js`, `styles.css`,
