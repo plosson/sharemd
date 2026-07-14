@@ -4,7 +4,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import { NotFoundError, type Vault } from './vault';
-import { TEXT_KEY, registerAuthor } from '../shared/blame';
+import { TEXT_KEY, registerAuthor, type AuthorInfo } from '../shared/blame';
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
@@ -155,6 +155,30 @@ export class Room {
       room.logEnabled = true;
     }
     return room;
+  }
+
+  /** Full CRDT state for a named snapshot (includes authorship + comments). */
+  snapshotState(): Uint8Array {
+    return Y.encodeStateAsUpdate(this.doc);
+  }
+
+  /**
+   * Converge the live text to `content` as a minimal, authored edit — the same
+   * middle-splice used for the disk reconcile — so a restore lands in blame and
+   * history and is itself reversible. Live peers see the text change, not a CRDT
+   * reset (applying an old full state would fork them). Returns chars changed.
+   */
+  restoreContent(content: string, author: AuthorInfo): number {
+    const ytext = this.doc.getText(TEXT_KEY);
+    const before = ytext.toString();
+    if (before === content) {
+      return 0;
+    }
+    this.doc.transact(() => {
+      registerAuthor(this.doc, author);
+      reconcileText(ytext, content);
+    });
+    return Math.abs(content.length - before.length);
   }
 
   private appendToLog(update: Uint8Array): void {

@@ -7,6 +7,7 @@ import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
 import { commentHighlightExtension, focusThread, setShowResolved, wireComments } from './comments';
 import { setPreviewEnabled, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
+import { closeVersions, openVersions } from './versions';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
 import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
@@ -111,6 +112,12 @@ document.querySelector('#history-open')!.addEventListener('click', () => {
   }
 });
 
+document.querySelector('#versions-open')!.addEventListener('click', () => {
+  if (currentPath) {
+    void openVersions(currentPath, user.name);
+  }
+});
+
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
   for (const state of provider.awareness.getStates().values()) {
@@ -133,6 +140,7 @@ function renderPresence(provider: WebsocketProvider) {
  */
 function teardownEditor() {
   closeHistory();
+  closeVersions();
   currentPath = null;
   if (current) {
     current.cleanup();

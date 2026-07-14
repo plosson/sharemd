@@ -94,8 +94,8 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   external disk edits while the server runs are unsupported (decision, not an oversight).
   The markdown file stays the source of truth for content; the `.mdio/` sidecars only
   add metadata (`<path>.yjs` CRDT state incl. authorship and comments, `<path>.log`
-  append-only update history), and any divergence is reconciled as a "disk"-authored edit
-  on hydrate.
+  append-only update history, `<path>.snapshots.json` named versions), and any divergence
+  is reconciled as a "disk"-authored edit on hydrate.
 - Editing tools must anchor with relative positions, never raw character offsets held
   across await points — other peers edit between tool calls.
 - Peer identity comes from the MCP config env (`MDIO_USERNAME`, optional

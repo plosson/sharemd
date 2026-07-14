@@ -31,6 +31,7 @@
           <button id="comment-add" type="button" title="Comment on the selected text">＋ comment</button>
           <button id="preview-toggle" type="button" title="Toggle rendered markdown preview">preview</button>
           <button id="history-open" type="button" title="Replay this document's edit history">history</button>
+          <button id="versions-open" type="button" title="Save and restore named versions of this document">versions</button>
           <button id="doc-rename" type="button" title="Rename this document">rename</button>
           <button id="doc-move" type="button" title="Move this document to another project">move</button>
           <button id="doc-delete" type="button" title="Delete this document">delete</button>
@@ -60,6 +61,19 @@
           <button id="history-close" type="button" title="Close history">✕</button>
         </header>
         <div id="history-editor"></div>
+      </div>
+    </div>
+    <div id="versions" hidden>
+      <div id="versions-panel">
+        <header id="versions-toolbar">
+          <span id="versions-title"></span>
+          <button id="versions-close" type="button" title="Close versions">✕</button>
+        </header>
+        <form id="versions-form">
+          <input id="versions-label" type="text" placeholder="Name this version…" maxlength="100" />
+          <button type="submit">Save current version</button>
+        </form>
+        <div id="versions-list"></div>
       </div>
     </div>
     <div id="login" hidden>

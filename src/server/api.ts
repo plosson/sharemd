@@ -5,18 +5,22 @@
 //   POST   /api/projects            {name}        create a project
 //   PATCH  /api/projects/:p         {name}        rename a project
 //   DELETE /api/projects/:p                       delete a project (docs included)
+//   GET    /api/projects/:p/mentions   ?who&open  open threads @mentioning a peer (all docs)
 //   GET    /api/projects/:p/docs                  list documents (project-relative)
 //   POST   /api/projects/:p/docs    {path}        create an empty document
 //   PATCH  /api/projects/:p/docs/*d {project?, path?}  rename / move a document
 //   DELETE /api/projects/:p/docs/*d               delete a document
 //   GET    /api/projects/:p/docs/*d/history       NDJSON update log
 //   GET    /api/projects/:p/docs/*d/blame         per-line authorship
+//   GET    /api/projects/:p/docs/*d/snapshots     list named versions
+//   POST   /api/projects/:p/docs/*d/snapshots {label, author?}  save a version
+//   POST   /api/projects/:p/docs/*d/snapshots/:id/restore {author?}  restore a version
 //
 // Errors are JSON {error} with 400 (invalid), 404 (missing), 409 (conflict).
 import * as Y from 'yjs';
 import { blameLines, TEXT_KEY } from '../shared/blame';
 import { listThreads } from '../shared/comments';
-import { ConflictError, NotFoundError, type Vault } from './vault';
+import { ConflictError, NotFoundError, type StoredSnapshot, type Vault } from './vault';
 import type { RoomRegistry } from './rooms';
 
 export function apiError(error: unknown): Response {
@@ -31,6 +35,29 @@ async function body(req: Request): Promise<Record<string, unknown>> {
   } catch {
     throw new Error('Request body must be JSON.');
   }
+}
+
+/** Like body(), but tolerates an empty/absent body (returns {}) — for optional fields. */
+async function bodyOptional(req: Request): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+let snapshotSeq = 0;
+
+function newSnapshotId(): string {
+  return `s-${Date.now().toString(36)}-${(++snapshotSeq).toString(36)}`;
+}
+
+/** Blame role from a username: owner-scoped ("plosson/claude") is an agent, "disk" is system. */
+function roleOf(author: string): 'human' | 'agent' | 'system' {
+  if (author === 'disk') {
+    return 'system';
+  }
+  return author.includes('/') ? 'agent' : 'human';
 }
 
 function requireString(value: unknown, field: string): string {
@@ -138,6 +165,74 @@ async function collectMentions(
   return entries.sort((a, b) => a.request.createdAt - b.request.createdAt);
 }
 
+/** Metadata view of a snapshot — the heavy `state` blob is never sent to clients. */
+function snapshotMeta({ state: _state, ...meta }: StoredSnapshot): Omit<StoredSnapshot, 'state'> {
+  return meta;
+}
+
+/**
+ * Named versions of a document: list, capture (full CRDT state), and restore.
+ * Restore converges the live text forward as an authored edit (see
+ * Room.restoreContent) rather than resetting CRDT state under live peers.
+ */
+async function handleSnapshots(
+  req: Request,
+  vault: Vault,
+  registry: RoomRegistry,
+  project: string,
+  relPath: string,
+  docPath: string,
+  snapshotId: string | null,
+): Promise<Response> {
+  if (snapshotId) {
+    if (req.method !== 'POST') {
+      return methodNotAllowed();
+    }
+    const snapshot = (await vault.readSnapshots(docPath)).find((entry) => entry.id === snapshotId);
+    if (!snapshot) {
+      throw new NotFoundError(`Snapshot "${snapshotId}" does not exist.`);
+    }
+    const raw = (await bodyOptional(req)).author;
+    const author = typeof raw === 'string' && raw ? raw : 'disk';
+    const restoreDoc = new Y.Doc({ gc: false });
+    Y.applyUpdate(restoreDoc, Buffer.from(snapshot.state, 'base64'));
+    const content = restoreDoc.getText(TEXT_KEY).toString();
+    restoreDoc.destroy();
+    const room = await registry.open(docPath);
+    const changed = room.restoreContent(content, { name: author, role: roleOf(author) });
+    return Response.json({ id: snapshot.id, label: snapshot.label, restoredChars: content.length, changed });
+  }
+
+  switch (req.method) {
+    case 'GET':
+      return Response.json({
+        project,
+        path: relPath,
+        snapshots: (await vault.readSnapshots(docPath)).map(snapshotMeta),
+      });
+    case 'POST': {
+      const payload = await body(req);
+      const label = requireString(payload.label, 'label');
+      const author = typeof payload.author === 'string' ? payload.author : '';
+      const room = await registry.open(docPath);
+      await room.flush(); // capture what is actually persisted, not a mid-debounce state
+      const snapshots = await vault.readSnapshots(docPath);
+      const snapshot: StoredSnapshot = {
+        id: newSnapshotId(),
+        label,
+        author,
+        ts: Date.now(),
+        state: Buffer.from(room.snapshotState()).toString('base64'),
+      };
+      snapshots.push(snapshot);
+      await vault.writeSnapshots(docPath, snapshots);
+      return Response.json(snapshotMeta(snapshot), { status: 201 });
+    }
+    default:
+      return methodNotAllowed();
+  }
+}
+
 /**
  * Route a /api/projects request. Returns null when the URL is not part of
  * this API space; throws vault errors for apiError() to map.
@@ -221,19 +316,25 @@ export async function handleProjectsApi(
     }
   }
 
-  // /api/projects/:p/docs/*d[/history|/blame] — the trailing action segment is
-  // unambiguous because document paths always end in a file extension.
+  // /api/projects/:p/docs/*d[/history|/blame|/snapshots[/:id/restore]] — trailing
+  // action segments are unambiguous because document paths always end in a file
+  // extension, so no doc path can end in "history"/"blame"/"snapshots"/"restore".
   let rest = segments.slice(4);
-  let action: 'history' | 'blame' | null = null;
+  let action: 'history' | 'blame' | 'snapshots' | null = null;
+  let snapshotId: string | null = null;
   const last = rest[rest.length - 1];
-  if (last === 'history' || last === 'blame') {
+  if (last === 'history' || last === 'blame' || last === 'snapshots') {
     action = last;
     rest = rest.slice(0, -1);
+  } else if (last === 'restore' && rest[rest.length - 3] === 'snapshots') {
+    action = 'snapshots';
+    snapshotId = rest[rest.length - 2]!;
+    rest = rest.slice(0, -3);
   }
   const relPath = rest.join('/');
   const docPath = `${project}/${relPath}`;
 
-  if (action) {
+  if (action === 'history' || action === 'blame') {
     if (req.method !== 'GET') {
       return methodNotAllowed();
     }
@@ -245,6 +346,10 @@ export async function handleProjectsApi(
       });
     }
     return Response.json({ project, path: relPath, lines: blameLines(room.doc) });
+  }
+
+  if (action === 'snapshots') {
+    return handleSnapshots(req, vault, registry, project, relPath, docPath, snapshotId);
   }
 
   switch (req.method) {

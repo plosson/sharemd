@@ -224,6 +224,7 @@ body {
 }
 
 #history-open,
+#versions-open,
 #doc-rename,
 #doc-move,
 #doc-delete {
@@ -238,6 +239,7 @@ body {
 }
 
 #history-open:hover,
+#versions-open:hover,
 #doc-rename:hover,
 #doc-move:hover {
   background: #eee;
@@ -343,6 +345,144 @@ body {
   overflow: auto;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   line-height: 1.6;
+}
+
+#versions {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fafafaee;
+  z-index: 10;
+}
+
+#versions[hidden] {
+  display: none;
+}
+
+#versions-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 92vw);
+  max-height: 80vh;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 30px #00000014;
+  overflow: hidden;
+}
+
+#versions-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #ddd;
+}
+
+#versions-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#versions-close {
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: #888;
+  cursor: pointer;
+}
+
+#versions-close:hover {
+  color: #333;
+}
+
+#versions-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+}
+
+#versions-label {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+#versions-form button {
+  padding: 6px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#versions-form button:hover {
+  background: #eee;
+}
+
+#versions-list {
+  overflow-y: auto;
+  padding: 4px 16px 16px;
+}
+
+.versions-empty {
+  color: #999;
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.version-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.version-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #222;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.version-sub {
+  font-size: 11px;
+  color: #888;
+}
+
+.version-restore {
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  background: #fff;
+  color: #666;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.version-restore:hover {
+  background: #eee;
+  color: #333;
 }
 
 .peer {

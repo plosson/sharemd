@@ -271,3 +271,78 @@ describe('document CRUD', () => {
     expect((await call('GET', '/api/projects/main/docs/no-such.md/blame')).status).toBe(404);
   });
 });
+
+interface SnapshotMeta {
+  id: string;
+  label: string;
+  author: string;
+  ts: number;
+  state?: string;
+}
+
+async function snapshotList(docUrl: string): Promise<SnapshotMeta[]> {
+  const response = await call('GET', `${docUrl}/snapshots`);
+  return ((await response.json()) as { snapshots: SnapshotMeta[] }).snapshots;
+}
+
+describe('document snapshots', () => {
+  test('capture → edit → restore converges the text back, authored to the restorer', async () => {
+    await apiCreateDoc(server, 'versions/notes.md');
+    const url = '/api/projects/versions/docs/notes.md';
+    const alice = await peer('versions/notes.md');
+    alice.text.insert(0, 'VERSION ONE\n');
+    await serverSaw('versions/notes.md', 'VERSION ONE');
+
+    // Capturing returns metadata (never the heavy state blob) and requires a label.
+    expect((await call('POST', `${url}/snapshots`, {})).status).toBe(400);
+    const created = await call('POST', `${url}/snapshots`, { label: 'first draft', author: 'plosson' });
+    expect(created.status).toBe(201);
+    const snapshot = (await created.json()) as SnapshotMeta;
+    expect(snapshot.label).toBe('first draft');
+    expect(snapshot.author).toBe('plosson');
+    expect(snapshot.state).toBeUndefined();
+    expect(await snapshotList(url)).toHaveLength(1);
+
+    // Move on: the text diverges.
+    alice.text.delete(0, alice.text.length);
+    alice.text.insert(0, 'VERSION TWO — rewritten\n');
+    await serverSaw('versions/notes.md', 'VERSION TWO');
+
+    // Restore pulls the live document back to the captured text, for every peer.
+    const restored = await call('POST', `${url}/snapshots/${snapshot.id}/restore`, { author: 'plosson' });
+    expect(restored.status).toBe(200);
+    await waitFor(() => alice.text.toString() === 'VERSION ONE\n', { label: 'restore to reach the peer' });
+
+    // The restore is an authored edit — plosson shows up in blame.
+    const blame = (await (await call('GET', `${url}/blame`)).json()) as {
+      lines: Array<{ authors: Array<{ name: string }> }>;
+    };
+    expect(blame.lines.some((line) => line.authors.some((a) => a.name === 'plosson'))).toBe(true);
+  });
+
+  test('the snapshots sidecar travels on move and is removed on delete', async () => {
+    await apiCreateDoc(server, 'versions/movable.md');
+    const url = '/api/projects/versions/docs/movable.md';
+    await peer('versions/movable.md'); // hydrate a room so capture has live state
+    await call('POST', `${url}/snapshots`, { label: 'keep me' });
+    const sidecar = join(vaultDir, STATE_DIR, 'versions', 'movable.md.snapshots.json');
+    expect(await Bun.file(sidecar).exists()).toBe(true);
+
+    // Rename within the project: the snapshot follows to the new path.
+    expect((await call('PATCH', url, { path: 'renamed.md' })).status).toBe(200);
+    const movedUrl = '/api/projects/versions/docs/renamed.md';
+    expect((await snapshotList(movedUrl)).map((s) => s.label)).toEqual(['keep me']);
+    expect(await Bun.file(sidecar).exists()).toBe(false);
+
+    // Delete: the sidecar goes with the document.
+    expect((await call('DELETE', movedUrl)).status).toBe(204);
+    const movedSidecar = join(vaultDir, STATE_DIR, 'versions', 'renamed.md.snapshots.json');
+    expect(await Bun.file(movedSidecar).exists()).toBe(false);
+  });
+
+  test('restoring a missing snapshot is 404', async () => {
+    await apiCreateDoc(server, 'versions/x.md');
+    const response = await call('POST', '/api/projects/versions/docs/x.md/snapshots/s-nope/restore', {});
+    expect(response.status).toBe(404);
+  });
+});

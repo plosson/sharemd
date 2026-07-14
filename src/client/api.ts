@@ -4,8 +4,8 @@ function encodeSegments(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
-/** URL of a document resource, or of one of its sub-resources (history/blame). */
-export function docApiUrl(docPath: string, action?: 'history' | 'blame'): string {
+/** URL of a document resource, or of one of its sub-resources (history/blame/snapshots). */
+export function docApiUrl(docPath: string, action?: 'history' | 'blame' | 'snapshots'): string {
   const [project, ...rest] = docPath.split('/');
   const base = `/api/projects/${encodeURIComponent(project!)}/docs/${encodeSegments(rest.join('/'))}`;
   return action ? `${base}/${action}` : base;
@@ -62,4 +62,30 @@ export function moveDoc(
 
 export function deleteDoc(docPath: string): Promise<void> {
   return api('DELETE', docApiUrl(docPath));
+}
+
+/** A named version of a document (metadata only; the CRDT state stays server-side). */
+export interface Snapshot {
+  id: string;
+  label: string;
+  author: string;
+  ts: number;
+}
+
+export async function listSnapshots(docPath: string): Promise<Snapshot[]> {
+  return (await api<{ snapshots: Snapshot[] }>('GET', docApiUrl(docPath, 'snapshots'))).snapshots;
+}
+
+export function createSnapshot(docPath: string, label: string, author: string): Promise<Snapshot> {
+  return api('POST', docApiUrl(docPath, 'snapshots'), { label, author });
+}
+
+export function restoreSnapshot(
+  docPath: string,
+  snapshotId: string,
+  author: string,
+): Promise<{ id: string; label: string; restoredChars: number; changed: number }> {
+  return api('POST', `${docApiUrl(docPath, 'snapshots')}/${encodeURIComponent(snapshotId)}/restore`, {
+    author,
+  });
 }

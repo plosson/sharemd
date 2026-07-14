@@ -606,3 +606,53 @@ test(
   },
   60_000,
 );
+
+test(
+  'versions: save a named checkpoint, then restore it to roll the live text back',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+
+    const toDocEnd = () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+
+    // Reach a known state, then checkpoint it.
+    await page.locator('.cm-content').click();
+    await toDocEnd();
+    await page.keyboard.type('\nVERSIONS_MARKER_ONE\n', { delay: 10 });
+    await waitForText('.cm-content', 'VERSIONS_MARKER_ONE');
+
+    await page.click('#versions-open');
+    await page.waitForSelector('#versions:not([hidden])');
+    expect(await page.textContent('#versions-title')).toBe('main/demo.md — versions');
+    await page.fill('#versions-label', 'checkpoint one');
+    await page.click('#versions-form button[type="submit"]');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.version-label')].some((el) => el.textContent === 'checkpoint one'),
+    );
+    await page.click('#versions-close');
+    await page.waitForSelector('#versions', { state: 'hidden' });
+
+    // Diverge from the checkpoint.
+    await page.locator('.cm-content').click();
+    await toDocEnd();
+    await page.keyboard.type('\nVERSIONS_MARKER_TWO\n', { delay: 10 });
+    await waitForText('.cm-content', 'VERSIONS_MARKER_TWO');
+
+    // Restore rolls the editor back to the checkpoint: ONE returns, TWO is gone.
+    await page.click('#versions-open');
+    await page.waitForSelector('#versions:not([hidden])');
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.click('.version-restore');
+    await page.waitForFunction(() => {
+      const text = document.querySelector('.cm-content')?.textContent ?? '';
+      return text.includes('VERSIONS_MARKER_ONE') && !text.includes('VERSIONS_MARKER_TWO');
+    });
+
+    // The restore is authored to the human and persisted like any other edit.
+    await server.registry.flushAll();
+    const onDisk = await Bun.file(join(vaultDir, 'main/demo.md')).text();
+    expect(onDisk).toInclude('VERSIONS_MARKER_ONE');
+    expect(onDisk).not.toInclude('VERSIONS_MARKER_TWO');
+  },
+  60_000,
+);
