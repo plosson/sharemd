@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { apiCreateDoc, connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
 import { parseUsername, resolveIdentity } from '../src/mcp/identity';
+import { acceptSuggestion, listSuggestions } from '../src/shared/suggestions';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -56,6 +57,8 @@ describe('mdio MCP', () => {
       'insert_text',
       'list_comments',
       'list_documents',
+      'list_mentions',
+      'list_suggestions',
       'open_document',
       'place_cursor',
       'read_document',
@@ -63,7 +66,12 @@ describe('mdio MCP', () => {
       'replace_text',
       'reply_comment',
       'resolve_comment',
+      'search_project',
       'search_text',
+      'suggest_delete',
+      'suggest_insert',
+      'suggest_replace',
+      'withdraw_suggestion',
     ]);
   });
 
@@ -401,6 +409,195 @@ describe('mdio MCP', () => {
     const orphan = orphaned.threads.find((candidate) => candidate.root.id === commentId)!;
     expect(orphan.currentText).toBeNull();
     expect(orphan.quotedText).toBe('ANCHORED_COMMENT_ZONE');
+  });
+
+  test('list_mentions is a cross-document work queue that empties as threads are handled', async () => {
+    await apiCreateDoc(server, 'main/queue-a.md');
+    await apiCreateDoc(server, 'main/queue-b.md');
+    const carol = await AgentClient.spawn(server.url, 'plosson/carol');
+    try {
+      // Alice (the shared agent) leaves a request for carol in two different docs.
+      const requests: Array<{ doc: string; commentId: string }> = [];
+      for (const [doc, zone] of [
+        ['queue-a.md', 'QUEUE_A_ZONE'],
+        ['queue-b.md', 'QUEUE_B_ZONE'],
+      ] as const) {
+        await agent.call('open_document', { path: doc });
+        await agent.call('place_cursor', { boundary: 'end' });
+        await agent.call('insert_text', { text: `\n${zone} needs work\n` });
+        const { matches } = await agent.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+          query: zone,
+        });
+        const { commentId } = await agent.call<{ commentId: string }>('add_comment', {
+          matchId: matches[0]!.matchId,
+          body: `please expand this, @plosson/carol`,
+        });
+        requests.push({ doc, commentId });
+      }
+
+      interface Mention {
+        doc: string;
+        threadId: string;
+        currentText: string | null;
+        resolved: boolean;
+        request: { author: string; body: string };
+        respondedByWho: boolean;
+      }
+      const queueFor = (carolClient: AgentClient, args: Record<string, unknown> = {}) =>
+        carolClient.call<{ who: string; mentions: Mention[] }>('list_mentions', args);
+
+      // Carol sees both, across documents, without opening anything.
+      const both = await eventually(
+        () => queueFor(carol),
+        ({ mentions }) => mentions.length === 2,
+        "alice's two mentions to reach carol's queue",
+      );
+      expect(both.who).toBe('plosson/carol');
+      expect(both.mentions.map((mention) => mention.doc).sort()).toEqual(['queue-a.md', 'queue-b.md']);
+      const first = both.mentions.find((mention) => mention.doc === 'queue-a.md')!;
+      expect(first.currentText).toBe('QUEUE_A_ZONE');
+      expect(first.request.author).toBe('plosson/alice');
+      expect(first.request.body).toInclude('please expand this');
+      expect(first.respondedByWho).toBe(false);
+
+      // Carol handles queue-a: opens it, replies, resolves.
+      await carol.call('open_document', { path: 'queue-a.md' });
+      await carol.call('reply_comment', { commentId: requests[0]!.commentId, body: 'done @plosson/alice' });
+      await carol.call('resolve_comment', { commentId: requests[0]!.commentId });
+
+      // The handled thread drops out of the default (unhandled-only) queue.
+      const remaining = await eventually(
+        () => queueFor(carol),
+        ({ mentions }) => mentions.length === 1,
+        'the resolved thread to leave carol’s queue',
+      );
+      expect(remaining.mentions[0]!.doc).toBe('queue-b.md');
+
+      // includeHandled surfaces it again, flagged resolved and answered.
+      const all = await queueFor(carol, { includeHandled: true });
+      const handled = all.mentions.find((mention) => mention.doc === 'queue-a.md')!;
+      expect(handled.resolved).toBe(true);
+      expect(handled.respondedByWho).toBe(true);
+    } finally {
+      await carol.close();
+    }
+  });
+
+  test('an open edit session broadcasts composing status and its section via presence', async () => {
+    await apiCreateDoc(server, 'main/presence.md');
+    const watcher = await connectPeer(server, 'main/presence.md');
+    const scribe = await AgentClient.spawn(server.url, 'plosson/dave');
+    try {
+      await scribe.call('open_document', { path: 'presence.md' });
+      await scribe.call('insert_text', { text: '# Intro\n\nsome text\n\n## Details\n\n' });
+
+      const scribeState = (): { status?: string; section?: string | null } | null => {
+        for (const state of watcher.provider.awareness.getStates().values()) {
+          const peer = (state as { user?: { name?: string; status?: string; section?: string | null } }).user;
+          if (peer?.name === 'plosson/dave') {
+            return peer;
+          }
+        }
+        return null;
+      };
+
+      // Opening an append session at the end announces "composing" in §Details.
+      await scribe.call('begin_edit', { mode: 'append' });
+      await waitFor(() => scribeState()?.status === 'composing', { label: 'composing to reach the watcher' });
+      expect(scribeState()!.section).toBe('Details');
+
+      // Committing returns to idle and clears the section.
+      await scribe.call('commit_edit');
+      await waitFor(() => scribeState()?.status === 'idle', { label: 'idle to reach the watcher' });
+      expect(scribeState()!.section).toBeNull();
+    } finally {
+      watcher.destroy();
+      await scribe.close();
+    }
+  });
+
+  test('search_project finds text across documents, case-insensitively, without opening them', async () => {
+    await apiCreateDoc(server, 'main/search-a.md');
+    await apiCreateDoc(server, 'main/search-b.md');
+    const writer = await AgentClient.spawn(server.url, 'plosson/erin');
+    try {
+      await writer.call('open_document', { path: 'search-a.md' });
+      await writer.call('insert_text', { text: '# Alpha\n\nThe UNIQUE_TERM lives here.\n' });
+      await writer.call('open_document', { path: 'search-b.md' });
+      await writer.call('insert_text', { text: '# Beta\n\nanother unique_term mention.\n' });
+
+      interface Hit {
+        doc: string;
+        line: number;
+        column: number;
+        snippet: string;
+      }
+      // The shared agent (alice) finds both without opening either document.
+      const { matches } = await eventually(
+        () => agent.call<{ matches: Hit[] }>('search_project', { query: 'UNIQUE_TERM' }),
+        (result) => result.matches.length >= 2,
+        'both matches to become searchable',
+      );
+      expect(matches.map((hit) => hit.doc).sort()).toEqual(['search-a.md', 'search-b.md']);
+      expect(matches.every((hit) => hit.snippet.toLowerCase().includes('unique_term'))).toBe(true);
+      expect(matches.find((hit) => hit.doc === 'search-a.md')!.line).toBe(3);
+
+      // A missing term yields nothing.
+      const none = await agent.call<{ matches: Hit[] }>('search_project', { query: 'NOT_ANYWHERE_XYZ' });
+      expect(none.matches).toEqual([]);
+    } finally {
+      await writer.close();
+    }
+  });
+
+  test('an agent proposes a suggestion; a human accepts it and the agent sees the outcome', async () => {
+    await apiCreateDoc(server, 'main/review.md');
+    const human = await connectPeer(server, 'main/review.md');
+    const scribe = await AgentClient.spawn(server.url, 'plosson/grace');
+    try {
+      await scribe.call('open_document', { path: 'review.md' });
+      await scribe.call('insert_text', { text: 'The quick brown fox.\n' });
+      await waitFor(() => human.text.toString().includes('quick brown fox'), { label: 'seed to reach human' });
+
+      // Propose replacing "quick" — the text must NOT change yet.
+      const { matches } = await scribe.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+        query: 'quick',
+      });
+      const { suggestionId, quotedText } = await scribe.call<{ suggestionId: string; quotedText: string }>(
+        'suggest_replace',
+        { matchId: matches[0]!.matchId, text: 'nimble' },
+      );
+      expect(quotedText).toBe('quick');
+      await waitFor(() => listSuggestions(human.doc).some((s) => s.id === suggestionId), {
+        label: 'suggestion to reach the human',
+      });
+      expect(human.text.toString()).toInclude('quick brown fox'); // still pending, text untouched
+
+      // The human accepts it → the text changes for everyone.
+      acceptSuggestion(human.doc, suggestionId, 'plosson');
+      await waitFor(() => human.text.toString().includes('nimble brown fox'), { label: 'accept to apply' });
+
+      // The agent sees the resolved status and who resolved it.
+      const { suggestions } = await eventually(
+        () =>
+          scribe.call<{ suggestions: Array<{ id: string; status: string; resolvedBy: string | null }> }>(
+            'list_suggestions',
+            { includeResolved: true },
+          ),
+        (result) => result.suggestions.find((s) => s.id === suggestionId)?.status === 'accepted',
+        'agent to observe the accepted status',
+      );
+      expect(suggestions.find((s) => s.id === suggestionId)!.resolvedBy).toBe('plosson');
+
+      // Pending-only view no longer lists it.
+      const pending = await scribe.call<{ suggestions: Array<{ id: string }> }>('list_suggestions', {
+        includeResolved: false,
+      });
+      expect(pending.suggestions.map((s) => s.id)).not.toContain(suggestionId);
+    } finally {
+      human.destroy();
+      await scribe.close();
+    }
   });
 
   test('edits persist to the file on disk', async () => {

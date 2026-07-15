@@ -31,17 +31,24 @@ runs are silently lost or diverge. Always go through the mdio MCP tools.
   handles (matchIds); they stay attached to the intended text while others edit.
 - You are visible. Write long content progressively (a paragraph or two per call), keep
   your cursor where you work, and prefer commenting over silently rewriting someone
-  else's prose.
+  else's prose. While a `begin_edit` session is open, humans see a "writing in §Section"
+  banner for you — so commit or abort promptly rather than holding a session open idle.
+- Yield to humans. If someone is actively typing in the same region you were about to
+  rewrite, prefer a comment over a competing edit, or work elsewhere and come back —
+  this is courtesy, not a lock (there are none).
 - One document open at a time (`open_document` replaces the previous one) and one
   stepwise edit session at a time.
 
 ## Workflows
 
 ### Orient
-1. `list_documents`, then `open_document(path)`.
+1. `list_documents` to see what exists; `search_project(query)` to find which document
+   contains something (full-text across the whole project, with line numbers — no need to
+   open each one). Then `open_document(path)`.
 2. `read_document` returns a window (default 6000 chars). For long documents, page with
    `startChar` until `endChar == charCount`.
 3. `blame_document` shows per-line authorship when you need to know who wrote what.
+`search_project` searches every document; `search_text` searches only the open one.
 
 ### Small targeted change
 - Preferred: `replace_text(query, replacement)` — one shot, no race window. The query
@@ -73,10 +80,26 @@ active — commit or abort first.
    Mention peers with `@name` or `@owner/agent` in the body.
 3. Comment first; edit someone else's prose only when asked to.
 
+### Propose edits for review (suggesting mode)
+When a human wants to approve your wording before it lands, propose instead of writing:
+1. `search_text` to anchor, then `suggest_replace(matchId, text)`,
+   `suggest_delete(startMatchId, endMatchId)`, or `suggest_insert(text, matchId?, edge?)`.
+   The text does not change — the human sees your proposal inline and accepts or rejects it.
+2. `list_suggestions(includeResolved: true)` shows what happened to yours (status +
+   who resolved it); `withdraw_suggestion(id)` retracts one you no longer want.
+Accepting/rejecting is the human's call (web UI) — you propose, they decide. For edits
+you're trusted to make directly, use the normal edit tools instead.
+
 ### Respond to feedback addressed to you
-1. `list_comments(mentioning: "<your username>", includeResolved: false)`.
-2. Make the requested change (workflows above).
-3. `reply_comment` explaining what you did, then `resolve_comment`.
+1. `list_mentions` is your work queue: it finds every open thread across the **whole
+   project** that @mentions you — no document need be open. (Within one open document,
+   `list_comments(mentioning: "<your username>", includeResolved: false)` is the local
+   view.) By default it returns only unhandled threads (not resolved, no reply from you);
+   pass `includeHandled: true` to see everything.
+2. For each entry: `open_document(entry.doc)`, then make the requested change (workflows
+   above), anchoring on `entry.currentText` (or `entry.quotedText` if it was deleted).
+3. `reply_comment` explaining what you did, then `resolve_comment` — that drops the
+   thread out of `list_mentions`, so the queue empties as you work.
 Orphaned threads (their anchored text was deleted) keep the original quote — use it to
 understand what the comment referred to.
 

@@ -100,6 +100,23 @@ test(
 );
 
 test(
+  'a human sees a live "writing" banner while an agent holds an open edit session',
+  async () => {
+    // Alice still has main/demo.md open from the previous test; the banner is hidden.
+    await page.waitForSelector('#activity', { state: 'hidden' });
+
+    await alice.call('begin_edit', { mode: 'append' });
+    await page.waitForSelector('#activity:not([hidden])');
+    expect(await page.textContent('#activity')).toInclude('plosson/alice is writing');
+
+    // Closing the session clears the banner.
+    await alice.call('abort_edit');
+    await page.waitForSelector('#activity', { state: 'hidden' });
+  },
+  30_000,
+);
+
+test(
   'remote edits flash a transient highlight attributed to the author',
   async () => {
     const carol = await connectPeer(server, 'main/demo.md');
@@ -605,4 +622,106 @@ test(
     }
   },
   60_000,
+);
+
+test(
+  'versions: save a named checkpoint, then restore it to roll the live text back',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+
+    const toDocEnd = () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+
+    // Reach a known state, then checkpoint it.
+    await page.locator('.cm-content').click();
+    await toDocEnd();
+    await page.keyboard.type('\nVERSIONS_MARKER_ONE\n', { delay: 10 });
+    await waitForText('.cm-content', 'VERSIONS_MARKER_ONE');
+
+    await page.click('#versions-open');
+    await page.waitForSelector('#versions:not([hidden])');
+    expect(await page.textContent('#versions-title')).toBe('main/demo.md — versions');
+    await page.fill('#versions-label', 'checkpoint one');
+    await page.click('#versions-form button[type="submit"]');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.version-label')].some((el) => el.textContent === 'checkpoint one'),
+    );
+    await page.click('#versions-close');
+    await page.waitForSelector('#versions', { state: 'hidden' });
+
+    // Diverge from the checkpoint.
+    await page.locator('.cm-content').click();
+    await toDocEnd();
+    await page.keyboard.type('\nVERSIONS_MARKER_TWO\n', { delay: 10 });
+    await waitForText('.cm-content', 'VERSIONS_MARKER_TWO');
+
+    // Restore rolls the editor back to the checkpoint: ONE returns, TWO is gone.
+    await page.click('#versions-open');
+    await page.waitForSelector('#versions:not([hidden])');
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.click('.version-restore');
+    await page.waitForFunction(() => {
+      const text = document.querySelector('.cm-content')?.textContent ?? '';
+      return text.includes('VERSIONS_MARKER_ONE') && !text.includes('VERSIONS_MARKER_TWO');
+    });
+
+    // The restore is authored to the human and persisted like any other edit.
+    await server.registry.flushAll();
+    const onDisk = await Bun.file(join(vaultDir, 'main/demo.md')).text();
+    expect(onDisk).toInclude('VERSIONS_MARKER_ONE');
+    expect(onDisk).not.toInclude('VERSIONS_MARKER_TWO');
+  },
+  60_000,
+);
+
+test(
+  'project search finds a document by its content and opens it',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+
+    await page.fill('#doc-search', 'First note');
+    await page.waitForSelector('#search-results:not([hidden]) .search-hit');
+    expect(await page.textContent('#search-results .search-hit')).toInclude('demo.md');
+
+    // Clicking a hit opens that document and dismisses the results.
+    await page.click('#search-results .search-hit');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    await page.waitForSelector('#search-results', { state: 'hidden' });
+    expect(await page.inputValue('#doc-search')).toBe('');
+  },
+  30_000,
+);
+
+test(
+  'an agent proposes a suggested edit and the human accepts it in the browser',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+    await alice.call('open_document', { path: 'demo.md' });
+
+    // Alice adds a target word, then proposes replacing it — the text does not change.
+    await alice.call('place_cursor', { boundary: 'end' });
+    await alice.call('insert_text', { text: '\nSUGGEST_TARGET_WORD\n' });
+    await waitForText('.cm-content', 'SUGGEST_TARGET_WORD');
+    const { matches } = await alice.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+      query: 'SUGGEST_TARGET_WORD',
+    });
+    await alice.call('suggest_replace', { matchId: matches[0]!.matchId, text: 'REPLACED_WORD' });
+
+    // The human sees the suggestion panel, the inline highlight, and the proposal — text intact.
+    await page.waitForSelector('#suggestions-panel:not([hidden]) .suggest-card');
+    await page.waitForSelector('.mdio-suggest-replace');
+    expect(await page.textContent('#suggestions-panel')).toInclude('REPLACED_WORD');
+    expect(await page.textContent('.cm-content')).toInclude('SUGGEST_TARGET_WORD');
+
+    // Accepting applies the change and empties the panel.
+    await page.click('#suggestions-panel .suggest-btn.primary');
+    await page.waitForFunction(() => {
+      const text = document.querySelector('.cm-content')?.textContent ?? '';
+      return text.includes('REPLACED_WORD') && !text.includes('SUGGEST_TARGET_WORD');
+    });
+    await page.waitForSelector('#suggestions-panel', { state: 'hidden' });
+  },
+  30_000,
 );

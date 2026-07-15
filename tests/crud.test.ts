@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { apiCreateDoc, apiCreateProject, connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
+import { registerAuthor } from '../src/shared/blame';
 import { STATE_DIR } from '../src/server/vault';
 import type { MdioServer } from '../src/server/index';
 
@@ -269,5 +270,138 @@ describe('document CRUD', () => {
     expect((await call('DELETE', '/api/projects/main/docs/no-such.md')).status).toBe(404);
     expect((await call('GET', '/api/projects/main/docs/no-such.md/history')).status).toBe(404);
     expect((await call('GET', '/api/projects/main/docs/no-such.md/blame')).status).toBe(404);
+  });
+});
+
+interface SnapshotMeta {
+  id: string;
+  label: string;
+  author: string;
+  ts: number;
+  state?: string;
+}
+
+async function snapshotList(docUrl: string): Promise<SnapshotMeta[]> {
+  const response = await call('GET', `${docUrl}/snapshots`);
+  return ((await response.json()) as { snapshots: SnapshotMeta[] }).snapshots;
+}
+
+describe('document snapshots', () => {
+  test('capture → edit → restore converges the text back, authored to the restorer', async () => {
+    await apiCreateDoc(server, 'versions/notes.md');
+    const url = '/api/projects/versions/docs/notes.md';
+    const alice = await peer('versions/notes.md');
+    alice.text.insert(0, 'VERSION ONE\n');
+    await serverSaw('versions/notes.md', 'VERSION ONE');
+
+    // Capturing returns metadata (never the heavy state blob) and requires a label.
+    expect((await call('POST', `${url}/snapshots`, {})).status).toBe(400);
+    const created = await call('POST', `${url}/snapshots`, { label: 'first draft', author: 'plosson' });
+    expect(created.status).toBe(201);
+    const snapshot = (await created.json()) as SnapshotMeta;
+    expect(snapshot.label).toBe('first draft');
+    expect(snapshot.author).toBe('plosson');
+    expect(snapshot.state).toBeUndefined();
+    expect(await snapshotList(url)).toHaveLength(1);
+
+    // Move on: the text diverges.
+    alice.text.delete(0, alice.text.length);
+    alice.text.insert(0, 'VERSION TWO — rewritten\n');
+    await serverSaw('versions/notes.md', 'VERSION TWO');
+
+    // Restore pulls the live document back to the captured text, for every peer.
+    const restored = await call('POST', `${url}/snapshots/${snapshot.id}/restore`, { author: 'plosson' });
+    expect(restored.status).toBe(200);
+    await waitFor(() => alice.text.toString() === 'VERSION ONE\n', { label: 'restore to reach the peer' });
+
+    // The restore is an authored edit — plosson shows up in blame.
+    const blame = (await (await call('GET', `${url}/blame`)).json()) as {
+      lines: Array<{ authors: Array<{ name: string }> }>;
+    };
+    expect(blame.lines.some((line) => line.authors.some((a) => a.name === 'plosson'))).toBe(true);
+  });
+
+  test('the snapshots sidecar travels on move and is removed on delete', async () => {
+    await apiCreateDoc(server, 'versions/movable.md');
+    const url = '/api/projects/versions/docs/movable.md';
+    await peer('versions/movable.md'); // hydrate a room so capture has live state
+    await call('POST', `${url}/snapshots`, { label: 'keep me' });
+    const sidecar = join(vaultDir, STATE_DIR, 'versions', 'movable.md.snapshots.json');
+    expect(await Bun.file(sidecar).exists()).toBe(true);
+
+    // Rename within the project: the snapshot follows to the new path.
+    expect((await call('PATCH', url, { path: 'renamed.md' })).status).toBe(200);
+    const movedUrl = '/api/projects/versions/docs/renamed.md';
+    expect((await snapshotList(movedUrl)).map((s) => s.label)).toEqual(['keep me']);
+    expect(await Bun.file(sidecar).exists()).toBe(false);
+
+    // Delete: the sidecar goes with the document.
+    expect((await call('DELETE', movedUrl)).status).toBe(204);
+    const movedSidecar = join(vaultDir, STATE_DIR, 'versions', 'renamed.md.snapshots.json');
+    expect(await Bun.file(movedSidecar).exists()).toBe(false);
+  });
+
+  test('restore never re-attributes text it did not touch', async () => {
+    // Content that reaches the room from disk is blamed to "disk" at hydrate —
+    // written to the file before the room ever opens.
+    await apiCreateDoc(server, 'versions/blamed.md');
+    await Bun.write(join(vaultDir, 'versions', 'blamed.md'), 'DISK LINE ONE\nDISK LINE TWO\n');
+    const url = '/api/projects/versions/docs/blamed.md';
+    const blameNames = async () =>
+      ((await (await call('GET', `${url}/blame`)).json()) as {
+        lines: Array<{ authors: Array<{ name: string }> }>;
+      }).lines.map((line) => line.authors.map((a) => a.name));
+    expect(await blameNames()).toEqual([['disk'], ['disk']]);
+
+    // Checkpoint, then Alice rewrites line two.
+    const created = await call('POST', `${url}/snapshots`, { label: 'v1', author: 'plosson' });
+    const { id } = (await created.json()) as { id: string };
+    const alice = await peer('versions/blamed.md');
+    registerAuthor(alice.doc, { name: 'Alice', role: 'human' });
+    const at = alice.text.toString().indexOf('DISK LINE TWO');
+    alice.text.delete(at, 'DISK LINE TWO'.length);
+    alice.text.insert(at, 'ALICE LINE TWO');
+    await serverSaw('versions/blamed.md', 'ALICE LINE TWO');
+
+    // Restore as plosson. The room doc's own clientID belongs to the "disk"
+    // reconcile, so a restore registering the restorer under that ID would
+    // retroactively flip line one to "plosson" — the regression this guards.
+    expect((await call('POST', `${url}/snapshots/${id}/restore`, { author: 'plosson' })).status).toBe(200);
+    const lines = await blameNames();
+    expect(lines[0]).toEqual(['disk']); // untouched by the restore: still disk's
+    expect(lines[1]).toContain('plosson'); // the re-added text is the restorer's
+  });
+
+  test('restoring a missing snapshot is 404', async () => {
+    await apiCreateDoc(server, 'versions/x.md');
+    const response = await call('POST', '/api/projects/versions/docs/x.md/snapshots/s-nope/restore', {});
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('project search', () => {
+  test('searches on-disk content, stays within the project, reports line + snippet', async () => {
+    await apiCreateDoc(server, 'searchp/one.md');
+    await Bun.write(join(vaultDir, 'searchp', 'one.md'), '# Title\n\nplease FINDME on disk\n');
+    // A different project with the same term must not leak into the results.
+    await apiCreateDoc(server, 'searchq/two.md');
+    await Bun.write(join(vaultDir, 'searchq', 'two.md'), 'FINDME elsewhere\n');
+
+    const response = await call('GET', '/api/projects/searchp/search?q=findme');
+    expect(response.status).toBe(200);
+    const { matches } = (await response.json()) as {
+      matches: Array<{ doc: string; line: number; column: number; snippet: string }>;
+    };
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.doc).toBe('one.md');
+    expect(matches[0]!.line).toBe(3);
+    expect(matches[0]!.column).toBe(8); // 1-based column of "FINDME"
+    expect(matches[0]!.snippet).toInclude('FINDME');
+  });
+
+  test('missing query is 400; unknown project is 404', async () => {
+    await apiCreateDoc(server, 'searchp/y.md');
+    expect((await call('GET', '/api/projects/searchp/search')).status).toBe(400);
+    expect((await call('GET', '/api/projects/no-such-project/search?q=x')).status).toBe(404);
   });
 });

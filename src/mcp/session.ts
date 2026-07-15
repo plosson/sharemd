@@ -76,9 +76,14 @@ export class DocumentSession {
     });
   }
 
-  setStatus(status: AgentStatus): void {
+  /**
+   * Broadcast edit intent: `composing` with the section being written shows peers
+   * a "writing in §Section" banner; `idle` clears it. `section` is the nearest
+   * heading above the edit, or null when there is none / on idle.
+   */
+  setStatus(status: AgentStatus, section: string | null = null): void {
     const previous = this.provider.awareness.getLocalState()?.user ?? {};
-    this.provider.awareness.setLocalStateField('user', { ...previous, status });
+    this.provider.awareness.setLocalStateField('user', { ...previous, status, section });
   }
 
   /** Broadcast the agent caret at a character index (rendered by y-codemirror.next in browsers). */

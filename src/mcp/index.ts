@@ -57,6 +57,29 @@ export async function runMcp(): Promise<void> {
   );
 
   server.registerTool(
+    'list_mentions',
+    {
+      description:
+        'Your work queue: open comment threads across your whole project that @mention you. Unlike list_comments (the open document only), this scans every document without opening it, so you can find where you are needed. Each entry gives the document path, the requesting comment, and its anchored text. Act on one by open_document(that path) → make the edit → reply_comment + resolve_comment to close the loop. By default only unhandled threads (not resolved, no reply from you) are returned; pass includeHandled:true to see all.',
+      inputSchema: { includeHandled: z.boolean().optional() },
+    },
+    ({ includeHandled }) => respond(() => runtime.listMentions({ includeHandled })),
+  );
+
+  server.registerTool(
+    'search_project',
+    {
+      description:
+        'Search the full text of every document in your project and get back the matching documents with line numbers and snippets — without opening anything. Use it to find the right document before open_document. Case-insensitive substring match, one hit per line. (search_text, by contrast, searches only the currently open document.)',
+      inputSchema: {
+        query: z.string().min(1),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    ({ query, maxResults }) => respond(() => runtime.searchProject(query, maxResults ?? 20)),
+  );
+
+  server.registerTool(
     'open_document',
     {
       description:
@@ -216,6 +239,59 @@ export async function runMcp(): Promise<void> {
       inputSchema: { commentId: z.string().min(1) },
     },
     ({ commentId }) => respond(() => runtime.deleteComment(commentId)),
+  );
+
+  server.registerTool(
+    'suggest_insert',
+    {
+      description:
+        'Propose inserting text (a suggested edit a human accepts or rejects) instead of writing it directly. Anchors at a match edge (matchId + edge) or, with no match, at your cursor. Use this when you want a human to review before your words land — otherwise just insert_text.',
+      inputSchema: {
+        text: z.string().min(1),
+        matchId: z.string().optional(),
+        edge: z.enum(['start', 'end']).optional(),
+      },
+    },
+    ({ text, matchId, edge }) => respond(() => runtime.suggestInsert(text, { matchId, edge })),
+  );
+
+  server.registerTool(
+    'suggest_replace',
+    {
+      description:
+        'Propose replacing a matched range with new text, as a suggested edit for a human to accept or reject. Anchor the range first with search_text.',
+      inputSchema: { matchId: z.string().min(1), text: z.string() },
+    },
+    ({ matchId, text }) => respond(() => runtime.suggestReplace(matchId, text)),
+  );
+
+  server.registerTool(
+    'suggest_delete',
+    {
+      description:
+        'Propose deleting everything from the start of one match to the end of another (inclusive), as a suggested edit for a human to accept or reject. Anchor both ends with search_text first.',
+      inputSchema: { startMatchId: z.string().min(1), endMatchId: z.string().min(1) },
+    },
+    ({ startMatchId, endMatchId }) => respond(() => runtime.suggestDelete(startMatchId, endMatchId)),
+  );
+
+  server.registerTool(
+    'list_suggestions',
+    {
+      description:
+        'List suggested edits on the open document (kind, proposed text, quoted/current target text, status, who resolved it). Filter to unresolved with includeResolved:false. Accepting or rejecting is the human\'s call in the web UI; check status here to see what happened to yours.',
+      inputSchema: { includeResolved: z.boolean().optional() },
+    },
+    (input) => respond(() => runtime.listSuggestions(input)),
+  );
+
+  server.registerTool(
+    'withdraw_suggestion',
+    {
+      description: 'Withdraw a pending suggestion you authored (removes it entirely).',
+      inputSchema: { suggestionId: z.string().min(1) },
+    },
+    ({ suggestionId }) => respond(() => runtime.withdrawSuggestion(suggestionId)),
   );
 
   server.registerTool(

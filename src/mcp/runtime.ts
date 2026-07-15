@@ -11,6 +11,13 @@ import {
   setResolved,
   type CommentThread,
 } from '../shared/comments';
+import {
+  addSuggestion,
+  deleteSuggestion,
+  listSuggestions,
+  suggestionAuthor,
+  type SuggestionView,
+} from '../shared/suggestions';
 
 /**
  * Editing runtime for one agent. Match handles and the cursor are stored as Yjs
@@ -91,6 +98,48 @@ export class AgentRuntime {
     }
     const { docs } = (await response.json()) as { docs: string[] };
     return docs;
+  }
+
+  /**
+   * Cross-document work queue: open comment threads anywhere in the project that
+   * @mention this peer. Hits the server directly — no document need be open, and
+   * scanning never opens or creates one.
+   */
+  async listMentions(input: { includeHandled?: boolean }): Promise<unknown> {
+    const params = new URLSearchParams({ who: this.identity.name });
+    if (input.includeHandled) {
+      params.set('open', 'false');
+    }
+    const response = await fetch(
+      `${this.serverHttpBase}/api/projects/${encodeURIComponent(this.project)}/mentions?${params}`,
+    );
+    if (!response.ok) {
+      const detail =
+        response.status === 404
+          ? `project "${this.project}" does not exist on the server`
+          : `HTTP ${response.status}`;
+      throw new Error(`Failed to list mentions: ${detail}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Full-text search across every document in the project — a way to locate the
+   * right document before opening it. Hits the server directly; opens nothing.
+   */
+  async searchProject(query: string, maxResults: number): Promise<unknown> {
+    const params = new URLSearchParams({ q: query, limit: String(maxResults) });
+    const response = await fetch(
+      `${this.serverHttpBase}/api/projects/${encodeURIComponent(this.project)}/search?${params}`,
+    );
+    if (!response.ok) {
+      const detail =
+        response.status === 404
+          ? `project "${this.project}" does not exist on the server`
+          : `HTTP ${response.status}`;
+      throw new Error(`Failed to search project: ${detail}`);
+    }
+    return response.json();
   }
 
   async openDocument(path: string): Promise<{ path: string; charCount: number }> {
@@ -184,6 +233,18 @@ export class AgentRuntime {
   private placeCursorAtIndex(index: number): void {
     this.cursor = this.relativeAt(index);
     this.requireSession().setCursor(index);
+  }
+
+  /** The nearest markdown heading at or above a character index, for presence. */
+  private sectionAt(index: number): string | null {
+    const lines = this.text().slice(0, index).split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const heading = /^#{1,6}\s+(.*\S)\s*$/.exec(lines[i]!);
+      if (heading) {
+        return heading[1]!;
+      }
+    }
+    return null;
   }
 
   // ── reads ────────────────────────────────────────────────────────────
@@ -427,6 +488,94 @@ export class AgentRuntime {
     return { deleted: commentId };
   }
 
+  // ── suggestions (propose an edit for a human to accept/reject) ────────
+
+  /** Propose inserting text at a match edge, or at the cursor when no match is given. */
+  suggestInsert(text: string, input: { matchId?: string; edge?: 'start' | 'end' }): {
+    suggestionId: string;
+    at: number;
+  } {
+    const session = this.requireSession();
+    let index: number;
+    if (input.matchId) {
+      const { from, to } = this.resolveMatch(input.matchId);
+      index = (input.edge ?? 'start') === 'start' ? from : to;
+    } else {
+      index = this.cursorIndex();
+    }
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, {
+        author: this.identity.name,
+        kind: 'insert',
+        from: index,
+        to: index,
+        text,
+      });
+    });
+    return { suggestionId, at: index };
+  }
+
+  /** Propose replacing a matched range with new text. */
+  suggestReplace(matchId: string, text: string): { suggestionId: string; quotedText: string } {
+    const session = this.requireSession();
+    const { from, to } = this.resolveMatch(matchId);
+    const quotedText = this.text().slice(from, to);
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, { author: this.identity.name, kind: 'replace', from, to, text });
+    });
+    return { suggestionId, quotedText };
+  }
+
+  /** Propose deleting everything from the start of one match to the end of another. */
+  suggestDelete(startMatchId: string, endMatchId: string): { suggestionId: string; quotedText: string } {
+    const session = this.requireSession();
+    const startRange = this.resolveMatch(startMatchId);
+    const endRange = this.resolveMatch(endMatchId);
+    const from = Math.min(startRange.from, endRange.from);
+    const to = Math.max(startRange.to, endRange.to);
+    const quotedText = this.text().slice(from, to);
+    let suggestionId = '';
+    session.transact(() => {
+      suggestionId = addSuggestion(session.doc, { author: this.identity.name, kind: 'delete', from, to, text: '' });
+    });
+    return { suggestionId, quotedText };
+  }
+
+  listSuggestions(input: { includeResolved?: boolean }): {
+    suggestions: Array<SuggestionView & { currentText: string | null }>;
+  } {
+    const session = this.requireSession();
+    const content = this.text();
+    let suggestions = listSuggestions(session.doc);
+    if (input.includeResolved === false) {
+      suggestions = suggestions.filter((suggestion) => suggestion.status === 'pending');
+    }
+    return {
+      suggestions: suggestions.map((suggestion) => ({
+        ...suggestion,
+        currentText:
+          suggestion.range && suggestion.kind !== 'insert'
+            ? content.slice(suggestion.range.from, suggestion.range.to)
+            : null,
+      })),
+    };
+  }
+
+  /** Withdraw a pending suggestion you authored (accept/reject is the human's call). */
+  withdrawSuggestion(suggestionId: string): { withdrawn: string } {
+    const session = this.requireSession();
+    const author = suggestionAuthor(session.doc, suggestionId);
+    if (author !== this.identity.name) {
+      throw new Error(`Only the author can withdraw a suggestion — this one is by "${author}".`);
+    }
+    session.transact(() => {
+      deleteSuggestion(session.doc, suggestionId);
+    });
+    return { withdrawn: suggestionId };
+  }
+
   // ── stepwise edit sessions ───────────────────────────────────────────
 
   beginEdit(mode: 'insert' | 'append'): { mode: string; startAt: number } {
@@ -441,7 +590,7 @@ export class AgentRuntime {
       end: this.relativeAt(at, -1),
       committedChars: 0,
     };
-    session.setStatus('composing');
+    session.setStatus('composing', this.sectionAt(at));
     this.placeCursorAtIndex(at);
     return { mode, startAt: at };
   }

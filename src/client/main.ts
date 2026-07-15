@@ -7,6 +7,8 @@ import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
 import { commentHighlightExtension, focusThread, setShowResolved, wireComments } from './comments';
 import { setPreviewEnabled, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
+import { closeVersions, openVersions } from './versions';
+import { suggestionHighlightExtension, wireSuggestions } from './suggestions';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
 import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
@@ -96,6 +98,7 @@ const editorHost = document.querySelector('#editor')!;
 const docTitle = document.querySelector('#doc-title')!;
 const statusEl = document.querySelector('#status')! as HTMLElement;
 const presenceEl = document.querySelector('#presence')!;
+const activityEl = document.querySelector('#activity')! as HTMLElement;
 
 let current: {
   provider: WebsocketProvider;
@@ -108,6 +111,84 @@ let currentPath: string | null = null;
 document.querySelector('#history-open')!.addEventListener('click', () => {
   if (currentPath) {
     void openHistory(currentPath);
+  }
+});
+
+document.querySelector('#versions-open')!.addEventListener('click', () => {
+  if (currentPath) {
+    void openVersions(currentPath, user.name);
+  }
+});
+
+const docSearch = document.querySelector('#doc-search')! as HTMLInputElement;
+const searchResults = document.querySelector('#search-results')!;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearSearch() {
+  docSearch.value = '';
+  searchResults.innerHTML = '';
+  searchResults.hidden = true;
+  docList.hidden = false;
+}
+
+async function runSearch(query: string): Promise<void> {
+  const trimmed = query.trim();
+  if (!currentProject || !trimmed) {
+    searchResults.hidden = true;
+    searchResults.innerHTML = '';
+    docList.hidden = false;
+    return;
+  }
+  let matches: api.SearchMatch[];
+  try {
+    matches = await api.searchProject(currentProject, trimmed);
+  } catch {
+    return;
+  }
+  // A slower query can resolve after the box changed — ignore stale results.
+  if (docSearch.value.trim() !== trimmed) {
+    return;
+  }
+  docList.hidden = true;
+  searchResults.hidden = false;
+  searchResults.innerHTML = '';
+  if (matches.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'search-empty';
+    empty.textContent = 'No matches.';
+    searchResults.appendChild(empty);
+    return;
+  }
+  for (const match of matches) {
+    const full = `${currentProject}/${match.doc}`;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'search-hit';
+    const where = document.createElement('span');
+    where.className = 'search-where';
+    where.textContent = `${match.doc}:${match.line}`;
+    const snip = document.createElement('span');
+    snip.className = 'search-snippet';
+    snip.textContent = match.snippet;
+    row.append(where, snip);
+    row.addEventListener('click', () => {
+      clearSearch();
+      openDocument(full);
+    });
+    searchResults.appendChild(row);
+  }
+}
+
+docSearch.addEventListener('input', () => {
+  const query = docSearch.value;
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+  }
+  searchTimer = setTimeout(() => void runSearch(query), 200);
+});
+docSearch.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    clearSearch();
   }
 });
 
@@ -126,6 +207,22 @@ function renderPresence(provider: WebsocketProvider) {
   }
 }
 
+/** Show which other peers are actively composing, and where — clears when they go idle. */
+function renderActivity(provider: WebsocketProvider) {
+  const writers: string[] = [];
+  for (const [clientId, state] of provider.awareness.getStates()) {
+    if (clientId === provider.awareness.clientID) {
+      continue; // don't narrate your own writing back to yourself
+    }
+    const peer = (state as { user?: { name?: string; status?: string; section?: string | null } }).user;
+    if (peer?.name && peer.status === 'composing') {
+      writers.push(peer.section ? `${peer.name} is writing in §${peer.section}` : `${peer.name} is writing…`);
+    }
+  }
+  activityEl.textContent = writers.join('  ·  ');
+  activityEl.hidden = writers.length === 0;
+}
+
 /**
  * `urlMode` — how this navigation reaches the URL: 'push' (user action, new
  * history entry, clears any focused comment), 'replace' (boot: normalize the
@@ -133,6 +230,8 @@ function renderPresence(provider: WebsocketProvider) {
  */
 function teardownEditor() {
   closeHistory();
+  closeVersions();
+  activityEl.hidden = true;
   currentPath = null;
   if (current) {
     current.cleanup();
@@ -172,7 +271,11 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
 
   provider.awareness.setLocalStateField('user', user);
   registerAuthor(doc, { name: user.name, color: user.color, role: 'human' });
-  provider.awareness.on('change', () => renderPresence(provider));
+  const renderAwareness = () => {
+    renderPresence(provider);
+    renderActivity(provider);
+  };
+  provider.awareness.on('change', renderAwareness);
   provider.on('status', ({ status }: { status: string }) => {
     statusEl.textContent = status;
     statusEl.dataset.status = status;
@@ -187,6 +290,7 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
       yCollab(ytext, provider.awareness, { undoManager }),
       remoteEditExtension(),
       commentHighlightExtension(),
+      suggestionHighlightExtension(),
     ],
     parent: editorHost,
   });
@@ -194,17 +298,19 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
   const cleanupComments = wireComments(view, doc, user, (state) =>
     writeUrlState({ comment: state.comment, resolved: state.resolved }),
   );
+  const cleanupSuggestions = wireSuggestions(view, doc, user);
   const cleanupPreview = wirePreview(ytext, (enabled) => writeUrlState({ preview: enabled }));
   const cleanup = () => {
     cleanupRemoteEdits();
     cleanupComments();
+    cleanupSuggestions();
     cleanupPreview();
   };
 
   current = { provider, view, doc, cleanup };
   // Test hook: lets e2e drive precise editor selections.
   (globalThis as { mdioView?: EditorView }).mdioView = view;
-  renderPresence(provider);
+  renderAwareness();
 }
 
 function renderMe() {
@@ -258,6 +364,7 @@ function renderDocList() {
 
 async function loadProject(project: string | null): Promise<void> {
   currentProject = project;
+  clearSearch();
   docs = project ? (await api.listDocs(project)).map((rel) => `${project}/${rel}`) : [];
   renderProjectSelect();
   renderDocList();

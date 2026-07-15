@@ -15,6 +15,17 @@ export const DEFAULT_PROJECT = 'main';
 /** Route names the web server claims — a project cannot shadow them. */
 const RESERVED_PROJECT_NAMES = new Set(['api', 'ws', 'app.js', 'styles.css', 'install.sh', 'install.ps1']);
 
+/** A named version of a document: full CRDT state (base64) plus display metadata. */
+export interface StoredSnapshot {
+  id: string;
+  label: string;
+  /** Who saved it (a username, possibly empty for older/programmatic captures). */
+  author: string;
+  ts: number;
+  /** base64 Y.encodeStateAsUpdate captured at save time. */
+  state: string;
+}
+
 /** A referenced project or document that isn't there — maps to HTTP 404. */
 export class NotFoundError extends Error {}
 /** A create/rename target that already exists — maps to HTTP 409. */
@@ -158,6 +169,30 @@ export class Vault {
     await Bun.write(this.logFile(docPath), line);
   }
 
+  /** Absolute path of the named-snapshots sidecar mirroring a document path. */
+  private snapshotFile(docPath: string): string {
+    const relative = this.resolvePath(docPath).slice(this.root.length + 1);
+    return join(this.root, STATE_DIR, `${relative}.snapshots.json`);
+  }
+
+  /** Named versions of a document (oldest first), or [] when none/unreadable. */
+  async readSnapshots(docPath: string): Promise<StoredSnapshot[]> {
+    const file = Bun.file(this.snapshotFile(docPath));
+    if (!(await file.exists())) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      return Array.isArray(parsed) ? (parsed as StoredSnapshot[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async writeSnapshots(docPath: string, snapshots: StoredSnapshot[]): Promise<void> {
+    await Bun.write(this.snapshotFile(docPath), JSON.stringify(snapshots));
+  }
+
   // ── projects ─────────────────────────────────────────────────────────
 
   private projectDir(name: string): string {
@@ -260,6 +295,7 @@ export class Vault {
     await rm(absolute);
     await rm(this.stateFile(docPath), { force: true });
     await rm(this.logFile(docPath), { force: true });
+    await rm(this.snapshotFile(docPath), { force: true });
   }
 
   /** Rename/move a document (possibly across projects); sidecars follow. */
@@ -275,6 +311,7 @@ export class Vault {
     for (const [from, to] of [
       [this.stateFile(fromPath), this.stateFile(toPath)],
       [this.logFile(fromPath), this.logFile(toPath)],
+      [this.snapshotFile(fromPath), this.snapshotFile(toPath)],
     ] as const) {
       if (existsSync(from)) {
         await mkdir(dirname(to), { recursive: true });

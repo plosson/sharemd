@@ -4,7 +4,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import { NotFoundError, type Vault } from './vault';
-import { TEXT_KEY, registerAuthor } from '../shared/blame';
+import { TEXT_KEY, registerAuthor, type AuthorInfo } from '../shared/blame';
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
@@ -155,6 +155,39 @@ export class Room {
       room.logEnabled = true;
     }
     return room;
+  }
+
+  /** Full CRDT state for a named snapshot (includes authorship + comments). */
+  snapshotState(): Uint8Array {
+    return Y.encodeStateAsUpdate(this.doc);
+  }
+
+  /**
+   * Converge the live text to `content` as a minimal, authored edit — the same
+   * middle-splice used for the disk reconcile — so a restore lands in blame and
+   * history and is itself reversible. Live peers see the text change, not a CRDT
+   * reset (applying an old full state would fork them). Returns chars changed.
+   *
+   * The splice runs in a scratch doc with its own clientID: blame keys authors
+   * by inserting clientID, and the room doc's own ID already belongs to the
+   * hydrate-time "disk" reconcile — writing under it would retroactively
+   * re-attribute everything that ID ever inserted, and successive restores by
+   * different users would overwrite each other.
+   */
+  restoreContent(content: string, author: AuthorInfo): number {
+    const before = this.doc.getText(TEXT_KEY).toString();
+    if (before === content) {
+      return 0;
+    }
+    const scratch = new Y.Doc({ gc: false });
+    Y.applyUpdate(scratch, Y.encodeStateAsUpdate(this.doc));
+    scratch.transact(() => {
+      registerAuthor(scratch, author);
+      reconcileText(scratch.getText(TEXT_KEY), content);
+    });
+    Y.applyUpdate(this.doc, Y.encodeStateAsUpdate(scratch, Y.encodeStateVector(this.doc)));
+    scratch.destroy();
+    return Math.abs(content.length - before.length);
   }
 
   private appendToLog(update: Uint8Array): void {
@@ -321,6 +354,11 @@ export class RoomRegistry {
     private readonly vault: Vault,
     private readonly persistDebounceMs = 400,
   ) {}
+
+  /** The already-open room for a name, or undefined — never opens or hydrates one. */
+  peek(name: string): Promise<Room> | undefined {
+    return this.rooms.get(name);
+  }
 
   open(name: string): Promise<Room> {
     let room = this.rooms.get(name);
