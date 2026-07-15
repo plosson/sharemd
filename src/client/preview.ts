@@ -1,12 +1,16 @@
 import MarkdownIt from 'markdown-it';
 import mermaid from 'mermaid';
 import type * as Y from 'yjs';
+import type { ViewMode } from './url-state';
 
 /**
- * Live markdown preview pane: renders the shared text with markdown-it
- * (debounced, so typing and remote edits don't thrash it) and turns
- * ```mermaid fences into rendered diagrams. Raw HTML in documents stays
- * escaped — the preview shows markdown, it doesn't execute it.
+ * View-mode layout + live markdown preview. The header's Edit|Both|Read
+ * segmented control drives this: Edit shows the editor only, Both splits the
+ * editor and the rendered preview, Read shows the full-width preview alone.
+ * The preview renders the shared text with markdown-it (debounced, so typing
+ * and remote edits don't thrash it) and turns ```mermaid fences into rendered
+ * diagrams. Raw HTML stays escaped — the preview shows markdown, it doesn't
+ * execute it.
  */
 
 const RENDER_DEBOUNCE_MS = 300;
@@ -27,20 +31,30 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   return defaultFence(tokens, idx, options, env, self);
 };
 
+const editorHost = document.querySelector('#editor')! as HTMLElement;
 const pane = document.querySelector('#preview')! as HTMLElement;
-const toggleButton = document.querySelector('#preview-toggle')! as HTMLButtonElement;
+const modeButtons: Record<ViewMode, HTMLButtonElement> = {
+  edit: document.querySelector('#mode-edit')! as HTMLButtonElement,
+  both: document.querySelector('#mode-both')! as HTMLButtonElement,
+  read: document.querySelector('#mode-read')! as HTMLButtonElement,
+};
 
-let enabled = false; // sticky across document switches
+let mode: ViewMode = 'edit'; // sticky across document switches
 let renderSeq = 0;
 let currentApply: (() => void) | null = null;
-let notifyChange: ((enabled: boolean) => void) | null = null;
+let notifyChange: ((mode: ViewMode) => void) | null = null;
 
-/** Apply externally-driven state (URL/boot) — applies without notifying back. */
-export function setPreviewEnabled(on: boolean): void {
-  if (enabled === on) {
+/** Whether the preview pane is showing (Both or Read). */
+function previewShown(): boolean {
+  return mode !== 'edit';
+}
+
+/** Apply externally-driven mode (URL/boot) — applies without notifying back. */
+export function setMode(next: ViewMode): void {
+  if (mode === next) {
     return;
   }
-  enabled = on;
+  mode = next;
   currentApply?.();
 }
 
@@ -72,12 +86,12 @@ async function renderInto(host: HTMLElement, text: string): Promise<void> {
   }
 }
 
-export function wirePreview(ytext: Y.Text, onChange?: (enabled: boolean) => void): () => void {
+export function wirePreview(ytext: Y.Text, onChange?: (mode: ViewMode) => void): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   notifyChange = onChange ?? null;
 
   const render = () => {
-    if (!enabled) {
+    if (!previewShown()) {
       return;
     }
     void renderInto(pane, ytext.toString());
@@ -94,29 +108,42 @@ export function wirePreview(ytext: Y.Text, onChange?: (enabled: boolean) => void
   };
 
   const applyState = () => {
-    pane.hidden = !enabled;
-    toggleButton.classList.toggle('active', enabled);
-    if (enabled) {
+    pane.hidden = !previewShown();
+    editorHost.hidden = mode === 'read';
+    for (const [name, button] of Object.entries(modeButtons)) {
+      button.classList.toggle('active', name === mode);
+    }
+    if (previewShown()) {
       render();
     } else {
       pane.innerHTML = '';
     }
   };
 
-  const onToggle = () => {
-    enabled = !enabled;
+  const select = (next: ViewMode) => {
+    if (mode === next) {
+      return;
+    }
+    mode = next;
     applyState();
-    notifyChange?.(enabled);
+    notifyChange?.(mode);
   };
 
+  const listeners = (Object.keys(modeButtons) as ViewMode[]).map((name) => {
+    const handler = () => select(name);
+    modeButtons[name].addEventListener('click', handler);
+    return [name, handler] as const;
+  });
+
   ytext.observe(scheduleRender);
-  toggleButton.addEventListener('click', onToggle);
   currentApply = applyState;
-  applyState(); // respect the sticky toggle when switching documents
+  applyState(); // respect the sticky mode when switching documents
 
   return () => {
     ytext.unobserve(scheduleRender);
-    toggleButton.removeEventListener('click', onToggle);
+    for (const [name, handler] of listeners) {
+      modeButtons[name].removeEventListener('click', handler);
+    }
     if (timer) {
       clearTimeout(timer);
     }
@@ -124,5 +151,6 @@ export function wirePreview(ytext: Y.Text, onChange?: (enabled: boolean) => void
     notifyChange = null;
     pane.innerHTML = '';
     pane.hidden = true;
+    editorHost.hidden = false;
   };
 }

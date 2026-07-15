@@ -1,16 +1,19 @@
 import { EditorView, basicSetup } from 'codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { yCollab } from 'y-codemirror.next';
 import { remoteEditExtension, wireRemoteEdits } from './remote-edits';
 import { commentHighlightExtension, focusThread, setShowResolved, wireComments } from './comments';
-import { setPreviewEnabled, wirePreview } from './preview';
+import { setMode, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
 import { closeVersions, openVersions } from './versions';
 import { openMcpConfig } from './mcp-config';
 import { suggestionHighlightExtension, wireSuggestions } from './suggestions';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
+import { askChoice, askConfirm, askText, toast } from './dialogs';
 import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
 
@@ -93,13 +96,22 @@ function promptForUser(): Promise<string> {
 }
 
 let user: { name: string; color: string; colorLight: string };
+const appEl = document.querySelector('#app')! as HTMLElement;
 const projectSelect = document.querySelector('#project-select')! as HTMLSelectElement;
-const docList = document.querySelector('#doc-list')!;
+const docList = document.querySelector('#doc-list')! as HTMLElement;
 const editorHost = document.querySelector('#editor')!;
-const docTitle = document.querySelector('#doc-title')!;
-const statusEl = document.querySelector('#status')! as HTMLElement;
+const headerEl = document.querySelector('#header')! as HTMLElement;
+const workspaceEl = document.querySelector('#workspace')! as HTMLElement;
+const emptyStateEl = document.querySelector('#empty-state')! as HTMLElement;
+const breadcrumbEl = document.querySelector('#breadcrumb')! as HTMLElement;
+const crumbProjectEl = document.querySelector('#crumb-project')!;
+const crumbTitleEl = document.querySelector('#crumb-title')!;
+const statusDot = document.querySelector('#status-dot')! as HTMLElement;
 const presenceEl = document.querySelector('#presence')!;
 const activityEl = document.querySelector('#activity')! as HTMLElement;
+const docSearch = document.querySelector('#doc-search')! as HTMLInputElement;
+const docNewButton = document.querySelector('#doc-new')! as HTMLButtonElement;
+const projectMenuEl = document.querySelector('#project-menu')! as HTMLElement;
 
 let current: {
   provider: WebsocketProvider;
@@ -108,6 +120,25 @@ let current: {
   cleanup: () => void;
 } | null = null;
 let currentPath: string | null = null;
+
+/** Dim markdown syntax so prose reads first; keep code monospaced. */
+const markdownProse = HighlightStyle.define([
+  { tag: tags.processingInstruction, color: 'var(--ink-faint)' },
+  { tag: tags.heading1, fontSize: '1.5em', fontWeight: '700' },
+  { tag: tags.heading2, fontSize: '1.3em', fontWeight: '700' },
+  { tag: tags.heading3, fontSize: '1.15em', fontWeight: '700' },
+  { tag: [tags.heading4, tags.heading5, tags.heading6], fontWeight: '700' },
+  { tag: tags.strong, fontWeight: '700' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: [tags.link, tags.url], color: 'var(--accent)' },
+  {
+    tag: tags.monospace,
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    background: 'var(--accent-soft)',
+    borderRadius: '3px',
+  },
+  { tag: tags.quote, color: 'var(--ink-soft)' },
+]);
 
 document.querySelector('#history-open')!.addEventListener('click', () => {
   if (currentPath) {
@@ -121,7 +152,6 @@ document.querySelector('#versions-open')!.addEventListener('click', () => {
   }
 });
 
-const docSearch = document.querySelector('#doc-search')! as HTMLInputElement;
 const searchResults = document.querySelector('#search-results')!;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -193,6 +223,12 @@ docSearch.addEventListener('keydown', (event) => {
   }
 });
 
+/** First letter of the peer's own name (agents drop the owner/ prefix). */
+function peerInitial(name: string): string {
+  const own = name.split('/').pop() ?? name;
+  return (own[0] ?? '?').toUpperCase();
+}
+
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
   for (const state of provider.awareness.getStates().values()) {
@@ -200,11 +236,12 @@ function renderPresence(provider: WebsocketProvider) {
     if (!peer?.name) {
       continue;
     }
-    const chip = document.createElement('span');
-    chip.className = 'peer';
-    chip.style.background = peer.color ?? '#888';
-    chip.textContent = peer.role === 'agent' ? `🤖 ${peer.name}` : peer.name;
-    presenceEl.appendChild(chip);
+    const avatar = document.createElement('span');
+    avatar.className = peer.role === 'agent' ? 'avatar agent' : 'avatar human';
+    avatar.style.background = peer.color ?? '#888';
+    avatar.textContent = peerInitial(peer.name);
+    avatar.title = peer.name;
+    presenceEl.appendChild(avatar);
   }
 }
 
@@ -222,6 +259,18 @@ function renderActivity(provider: WebsocketProvider) {
   }
   activityEl.textContent = writers.join('  ·  ');
   activityEl.hidden = writers.length === 0;
+}
+
+/** Title shown in the breadcrumb: the document's first heading, else its filename. */
+function docTitle(path: string, text: string): string {
+  const heading = /^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/m.exec(text);
+  return heading ? heading[1]!.trim() : path.slice(path.lastIndexOf('/') + 1);
+}
+
+function renderBreadcrumb(path: string, text: string): void {
+  crumbProjectEl.textContent = path.split('/')[0]!;
+  crumbTitleEl.textContent = docTitle(path, text);
+  breadcrumbEl.title = path; // raw path lives in the tooltip now
 }
 
 /**
@@ -243,9 +292,48 @@ function teardownEditor() {
   }
 }
 
+/** Centered empty state in the main pane — no project yet, or an empty project. */
+function showEmptyState(): void {
+  headerEl.hidden = true;
+  workspaceEl.hidden = true;
+  emptyStateEl.hidden = false;
+
+  const box = document.createElement('div');
+  box.className = 'empty-box';
+  const heading = document.createElement('h2');
+  const sub = document.createElement('p');
+  const actions = document.createElement('div');
+  actions.className = 'empty-actions';
+
+  if (currentProject) {
+    heading.textContent = currentProject;
+    sub.textContent = 'No documents yet';
+    actions.append(
+      emptyButton('＋ Create a document', 'primary', () => void newDocFlow()),
+      emptyButton('Connect an agent', 'ghost', () => openMcpConfig(currentProject!, `${user.name}/claude`)),
+    );
+  } else {
+    heading.textContent = 'Welcome to mdio';
+    sub.textContent = 'Live markdown for humans and AI agents. Create a project to begin.';
+    actions.append(emptyButton('＋ Create your first project', 'primary', () => void newProjectFlow()));
+  }
+
+  box.append(heading, sub, actions);
+  emptyStateEl.replaceChildren(box);
+}
+
+function emptyButton(label: string, kind: 'primary' | 'ghost', onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `empty-btn ${kind}`;
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
 function closeDocument() {
   teardownEditor();
-  docTitle.textContent = 'Select a document';
+  showEmptyState();
   for (const item of docList.querySelectorAll('li')) {
     item.classList.remove('active');
   }
@@ -259,7 +347,10 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
   }
   teardownEditor();
   currentPath = path;
-  docTitle.textContent = path;
+  headerEl.hidden = false;
+  workspaceEl.hidden = false;
+  emptyStateEl.hidden = true;
+  emptyStateEl.replaceChildren();
   for (const item of docList.querySelectorAll('li')) {
     item.classList.toggle('active', item.dataset.path === path);
   }
@@ -270,6 +361,16 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
   const ytext = doc.getText(TEXT_KEY);
   const undoManager = new Y.UndoManager(ytext);
 
+  renderBreadcrumb(path, ytext.toString());
+  let titleTimer: ReturnType<typeof setTimeout> | null = null;
+  const refreshTitle = () => {
+    if (titleTimer) {
+      clearTimeout(titleTimer);
+    }
+    titleTimer = setTimeout(() => renderBreadcrumb(path, ytext.toString()), 300);
+  };
+  ytext.observe(refreshTitle);
+
   provider.awareness.setLocalStateField('user', user);
   registerAuthor(doc, { name: user.name, color: user.color, role: 'human' });
   const renderAwareness = () => {
@@ -278,8 +379,8 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
   };
   provider.awareness.on('change', renderAwareness);
   provider.on('status', ({ status }: { status: string }) => {
-    statusEl.textContent = status;
-    statusEl.dataset.status = status;
+    statusDot.dataset.status = status;
+    statusDot.title = status;
   });
 
   const view = new EditorView({
@@ -287,6 +388,7 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
     extensions: [
       basicSetup,
       markdown(),
+      syntaxHighlighting(markdownProse),
       EditorView.lineWrapping,
       yCollab(ytext, provider.awareness, { undoManager }),
       remoteEditExtension(),
@@ -300,8 +402,12 @@ function openDocument(path: string, urlMode: 'push' | 'replace' | 'none' = 'push
     writeUrlState({ comment: state.comment, resolved: state.resolved }),
   );
   const cleanupSuggestions = wireSuggestions(view, doc, user);
-  const cleanupPreview = wirePreview(ytext, (enabled) => writeUrlState({ preview: enabled }));
+  const cleanupPreview = wirePreview(ytext, (mode) => writeUrlState({ mode }));
   const cleanup = () => {
+    ytext.unobserve(refreshTitle);
+    if (titleTimer) {
+      clearTimeout(titleTimer);
+    }
     cleanupRemoteEdits();
     cleanupComments();
     cleanupSuggestions();
@@ -327,7 +433,7 @@ function renderMe() {
 }
 
 function applyViewState(state: UrlState) {
-  setPreviewEnabled(state.preview);
+  setMode(state.mode);
   setShowResolved(state.resolved);
   focusThread(state.comment);
 }
@@ -335,6 +441,14 @@ function applyViewState(state: UrlState) {
 let projects: string[] = [];
 let currentProject: string | null = null;
 let docs: string[] = [];
+
+/** Sidebar chrome that only makes sense inside a project (search, new-doc, ⋯). */
+function renderSidebar(): void {
+  const inProject = currentProject !== null;
+  docSearch.hidden = !inProject;
+  docNewButton.hidden = !inProject;
+  projectMenuEl.hidden = !inProject;
+}
 
 function renderProjectSelect() {
   projectSelect.innerHTML = '';
@@ -348,6 +462,7 @@ function renderProjectSelect() {
   if (currentProject) {
     projectSelect.value = currentProject;
   }
+  renderSidebar();
 }
 
 function renderDocList() {
@@ -401,16 +516,205 @@ async function enterProject(project: string | null, doc?: string) {
   }
 }
 
-/** Run a CRUD action; API failures (conflicts, reserved names, …) surface as alerts. */
+/** Run a CRUD action; API failures (conflicts, reserved names, …) surface as toasts. */
 async function attempt(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (error) {
-    alert(error instanceof Error ? error.message : String(error));
+    toast(error instanceof Error ? error.message : String(error), { tone: 'error' });
   }
 }
 
+/** Refetch the project list (and current docs) — for focus and external changes. */
+async function refreshProjects(): Promise<void> {
+  let latest: string[];
+  try {
+    latest = await api.listProjects();
+  } catch {
+    return;
+  }
+  projects = latest;
+  if (currentProject && projects.includes(currentProject)) {
+    docs = (await api.listDocs(currentProject)).map((rel) => `${currentProject}/${rel}`);
+  }
+  renderProjectSelect();
+  renderDocList();
+}
+
+// ── CRUD flows (shared by the menus, sidebar buttons, and empty states) ──────
+
+async function newProjectFlow(): Promise<void> {
+  const name = (await askText({ title: 'New project', hint: 'Name for the new project', confirmLabel: 'Create' }))?.trim();
+  if (!name) {
+    return;
+  }
+  await attempt(async () => {
+    await api.createProject(name);
+    projects = await api.listProjects();
+    await enterProject(name);
+    toast(`Created ${name}`);
+  });
+}
+
+async function renameProjectFlow(): Promise<void> {
+  if (!currentProject) {
+    return;
+  }
+  const from = currentProject;
+  const to = (await askText({ title: 'Rename project', initial: from, confirmLabel: 'Rename' }))?.trim();
+  if (!to || to === from) {
+    return;
+  }
+  await attempt(async () => {
+    const rest = currentPath?.slice(from.length);
+    await api.renameProject(from, to);
+    projects = await api.listProjects();
+    await enterProject(to, rest ? `${to}${rest}` : undefined);
+    toast(`Renamed to ${to}`);
+  });
+}
+
+async function deleteProjectFlow(): Promise<void> {
+  if (!currentProject) {
+    return;
+  }
+  const name = currentProject;
+  const ok = await askConfirm({
+    title: `Delete project “${name}”?`,
+    body: 'This deletes the project and all of its documents. This cannot be undone.',
+    confirmLabel: 'Delete project',
+    danger: true,
+  });
+  if (!ok) {
+    return;
+  }
+  await attempt(async () => {
+    await api.deleteProject(name);
+    projects = await api.listProjects();
+    await enterProject(projects[0] ?? null);
+    toast(`Deleted ${name}`);
+  });
+}
+
+async function newDocFlow(): Promise<void> {
+  if (!currentProject) {
+    toast('Create a project first.', { tone: 'error' });
+    return;
+  }
+  const project = currentProject;
+  const entered = (
+    await askText({ title: 'New document', hint: 'e.g. notes.md or specs/plan.md', confirmLabel: 'Create' })
+  )?.trim();
+  if (!entered) {
+    return;
+  }
+  const path = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
+  await attempt(async () => {
+    await api.createDoc(project, path);
+    await loadProject(project);
+    openDocument(`${project}/${path}`);
+    toast(`Created ${path}`);
+  });
+}
+
+async function renameDocFlow(): Promise<void> {
+  if (!currentPath || !currentProject) {
+    return;
+  }
+  const project = currentProject;
+  const from = currentPath.slice(project.length + 1);
+  const entered = (await askText({ title: 'Rename document', initial: from, confirmLabel: 'Rename' }))?.trim();
+  if (!entered || entered === from) {
+    return;
+  }
+  const to = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
+  await attempt(async () => {
+    await api.moveDoc(`${project}/${from}`, { path: to });
+    await loadProject(project);
+    openDocument(`${project}/${to}`, 'replace');
+    toast(`Renamed to ${to}`);
+  });
+}
+
+async function moveDocFlow(): Promise<void> {
+  if (!currentPath || !currentProject) {
+    return;
+  }
+  const source = currentPath;
+  const others = projects.filter((name) => name !== currentProject);
+  if (others.length === 0) {
+    toast('There is no other project to move to.', { tone: 'error' });
+    return;
+  }
+  const target = await askChoice({
+    title: 'Move to project',
+    hint: 'Pick the project to move this document into.',
+    options: others.map((name) => ({ value: name, label: name })),
+  });
+  if (!target) {
+    return;
+  }
+  await attempt(async () => {
+    const rel = source.slice(source.indexOf('/') + 1);
+    await api.moveDoc(source, { project: target });
+    await enterProject(target, `${target}/${rel}`);
+    toast(`Moved to ${target}`);
+  });
+}
+
+async function deleteDocFlow(): Promise<void> {
+  if (!currentPath || !currentProject) {
+    return;
+  }
+  const path = currentPath;
+  const project = currentProject;
+  const name = path.slice(project.length + 1);
+  const ok = await askConfirm({
+    title: `Delete “${name}”?`,
+    body: 'This cannot be undone.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) {
+    return;
+  }
+  await attempt(async () => {
+    await api.deleteDoc(path);
+    await enterProject(project);
+    toast(`Deleted ${name}`);
+  });
+}
+
+/** A plain-DOM dropdown: toggle button + positioned list, closes on outside click / Escape. */
+function wireMenu(menuSelector: string): void {
+  const menu = document.querySelector(menuSelector)! as HTMLElement;
+  const toggle = menu.querySelector('.menu-toggle')! as HTMLButtonElement;
+  const list = menu.querySelector('.menu-list')! as HTMLElement;
+  const setOpen = (open: boolean) => {
+    list.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  };
+  toggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    setOpen(list.hidden);
+  });
+  list.addEventListener('click', () => setOpen(false));
+  document.addEventListener('click', (event) => {
+    if (!menu.contains(event.target as Node)) {
+      setOpen(false);
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  });
+}
+
 function wireCrud() {
+  wireMenu('#project-menu');
+  wireMenu('#doc-menu');
+
   projectSelect.addEventListener('change', async () => {
     await loadProject(projectSelect.value);
     if (docs[0]) {
@@ -429,125 +733,16 @@ function wireCrud() {
     void openMcpConfig(currentProject, `${user.name}/claude`);
   });
 
-  document.querySelector('#project-new')!.addEventListener('click', () => {
-    const name = prompt('New project name')?.trim();
-    if (!name) {
-      return;
-    }
-    void attempt(async () => {
-      await api.createProject(name);
-      projects = await api.listProjects();
-      await enterProject(name);
-    });
-  });
+  document.querySelector('#project-new')!.addEventListener('click', () => void newProjectFlow());
+  document.querySelector('#project-rename')!.addEventListener('click', () => void renameProjectFlow());
+  document.querySelector('#project-delete')!.addEventListener('click', () => void deleteProjectFlow());
+  document.querySelector('#doc-new')!.addEventListener('click', () => void newDocFlow());
+  document.querySelector('#doc-rename')!.addEventListener('click', () => void renameDocFlow());
+  document.querySelector('#doc-move')!.addEventListener('click', () => void moveDocFlow());
+  document.querySelector('#doc-delete')!.addEventListener('click', () => void deleteDocFlow());
 
-  document.querySelector('#project-rename')!.addEventListener('click', () => {
-    if (!currentProject) {
-      return;
-    }
-    const from = currentProject;
-    const to = prompt('Rename project', from)?.trim();
-    if (!to || to === from) {
-      return;
-    }
-    void attempt(async () => {
-      const rest = currentPath?.slice(from.length);
-      await api.renameProject(from, to);
-      projects = await api.listProjects();
-      await enterProject(to, rest ? `${to}${rest}` : undefined);
-    });
-  });
-
-  document.querySelector('#project-delete')!.addEventListener('click', () => {
-    if (!currentProject) {
-      return;
-    }
-    const name = currentProject;
-    if (!confirm(`Delete project "${name}" and all its documents?`)) {
-      return;
-    }
-    void attempt(async () => {
-      await api.deleteProject(name);
-      projects = await api.listProjects();
-      await enterProject(projects[0] ?? null);
-    });
-  });
-
-  document.querySelector('#doc-new')!.addEventListener('click', () => {
-    if (!currentProject) {
-      alert('Create a project first.');
-      return;
-    }
-    const project = currentProject;
-    const entered = prompt('Document name (e.g. notes.md or specs/plan.md)')?.trim();
-    if (!entered) {
-      return;
-    }
-    const path = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
-    void attempt(async () => {
-      await api.createDoc(project, path);
-      await loadProject(project);
-      openDocument(`${project}/${path}`);
-    });
-  });
-
-  document.querySelector('#doc-rename')!.addEventListener('click', () => {
-    if (!currentPath || !currentProject) {
-      return;
-    }
-    const project = currentProject;
-    const from = currentPath.slice(project.length + 1);
-    const entered = prompt('Rename document', from)?.trim();
-    if (!entered || entered === from) {
-      return;
-    }
-    const to = /\.(md|markdown|txt)$/i.test(entered) ? entered : `${entered}.md`;
-    void attempt(async () => {
-      await api.moveDoc(`${project}/${from}`, { path: to });
-      await loadProject(project);
-      openDocument(`${project}/${to}`, 'replace');
-    });
-  });
-
-  document.querySelector('#doc-move')!.addEventListener('click', () => {
-    if (!currentPath || !currentProject) {
-      return;
-    }
-    const source = currentPath;
-    const others = projects.filter((name) => name !== currentProject);
-    if (others.length === 0) {
-      alert('There is no other project to move to.');
-      return;
-    }
-    const target = prompt(`Move to project (${others.join(', ')})`)?.trim();
-    if (!target || target === currentProject) {
-      return;
-    }
-    if (!projects.includes(target)) {
-      alert(`No such project: "${target}"`);
-      return;
-    }
-    void attempt(async () => {
-      const rel = source.slice(source.indexOf('/') + 1);
-      await api.moveDoc(source, { project: target });
-      await enterProject(target, `${target}/${rel}`);
-    });
-  });
-
-  document.querySelector('#doc-delete')!.addEventListener('click', () => {
-    if (!currentPath || !currentProject) {
-      return;
-    }
-    const path = currentPath;
-    const project = currentProject;
-    if (!confirm(`Delete "${path}"?`)) {
-      return;
-    }
-    void attempt(async () => {
-      await api.deleteDoc(path);
-      await enterProject(project);
-    });
-  });
+  // A project created (or removed) in another tab should appear on return.
+  window.addEventListener('focus', () => void refreshProjects());
 }
 
 async function init() {
@@ -561,6 +756,7 @@ async function init() {
 async function main() {
   const name = storedUser() ?? (await promptForUser());
   user = withColors(name);
+  appEl.hidden = false;
   renderMe();
   await init();
 }

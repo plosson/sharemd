@@ -1,4 +1,5 @@
 import { createSnapshot, listSnapshots, restoreSnapshot, type Snapshot } from './api';
+import { askConfirm, toast } from './dialogs';
 
 /**
  * Versions overlay: save named checkpoints of a document and restore any of
@@ -12,6 +13,7 @@ const titleEl = document.querySelector('#versions-title')!;
 const listEl = document.querySelector('#versions-list')!;
 const form = document.querySelector('#versions-form')! as HTMLFormElement;
 const labelInput = document.querySelector('#versions-label')! as HTMLInputElement;
+const saveButton = document.querySelector('#versions-save')! as HTMLButtonElement;
 const closeButton = document.querySelector('#versions-close')! as HTMLButtonElement;
 
 let ctx: { path: string; author: string } | null = null;
@@ -59,18 +61,22 @@ async function doRestore(snapshot: Snapshot): Promise<void> {
   if (!ctx) {
     return;
   }
-  if (
-    !confirm(
-      `Restore "${snapshot.label}"? The current text is replaced with that version. ` +
-        `This is itself a normal edit, so you can undo it or restore a newer version.`,
-    )
-  ) {
+  const ok = await askConfirm({
+    title: `Restore “${snapshot.label}”?`,
+    body:
+      'The current text is replaced with that version. This is itself a normal ' +
+      'edit, so you can undo it or restore a newer version.',
+    confirmLabel: 'Restore',
+  });
+  if (!ok) {
     return;
   }
   try {
     await restoreSnapshot(ctx.path, snapshot.id, ctx.author);
+    toast(`Restored “${snapshot.label}”`);
+    await refresh();
   } catch (error) {
-    alert(`Restore failed: ${error instanceof Error ? error.message : String(error)}`);
+    toast(`Restore failed: ${error instanceof Error ? error.message : String(error)}`, { tone: 'error' });
   }
 }
 
@@ -85,12 +91,16 @@ form.addEventListener('submit', (event) => {
   }
   const { path, author } = ctx;
   void (async () => {
+    saveButton.disabled = true;
     try {
       await createSnapshot(path, label, author);
       labelInput.value = '';
       await refresh();
+      toast(`Saved “${label}”`);
     } catch (error) {
-      alert(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
+      toast(`Save failed: ${error instanceof Error ? error.message : String(error)}`, { tone: 'error' });
+    } finally {
+      saveButton.disabled = false;
     }
   })();
 });

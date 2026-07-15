@@ -1,20 +1,23 @@
 /**
  * Navigation state: the document is the URL path (/project/notes/plan.md) and
  * a bare project page is /project, so links are stable, shareable paths. View
- * state stays in the hash as query-style params (#preview=1&comment=c-xyz).
+ * state stays in the hash as query-style params (#mode=both&comment=c-xyz).
  *
  * Document switches push a history entry (back/forward navigates documents);
- * view-state changes (preview, comment focus, filters) replace the current
- * entry so they survive reload and sharing without polluting history.
+ * view-state changes (mode, comment focus, filters) replace the current entry
+ * so they survive reload and sharing without polluting history.
  * pushState/replaceState don't fire popstate, so only user navigation
  * (back/forward, hash edits) triggers the listener — no self-echo guard needed.
  */
+
+/** Editor layout: editor only, editor + preview split, or preview only. */
+export type ViewMode = 'edit' | 'both' | 'read';
 
 export interface UrlState {
   doc: string | null;
   /** The doc's project (first path segment), or a doc-less project page. */
   project: string | null;
-  preview: boolean;
+  mode: ViewMode;
   comment: string | null;
   resolved: boolean;
 }
@@ -33,6 +36,10 @@ function encodePath(path: string): string {
   return `/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+function readMode(raw: string | null): ViewMode {
+  return raw === 'both' || raw === 'read' ? raw : 'edit';
+}
+
 export function readUrlState(): UrlState {
   const params = new URLSearchParams(location.hash.slice(1));
   const path = decodePath(location.pathname);
@@ -40,7 +47,7 @@ export function readUrlState(): UrlState {
   return {
     doc: isDoc ? path : null,
     project: isDoc ? path!.split('/')[0]! : path,
-    preview: params.get('preview') === '1',
+    mode: readMode(params.get('mode')),
     comment: params.get('comment'),
     resolved: params.get('resolved') === '1',
   };
@@ -54,8 +61,8 @@ export function writeUrlState(partial: Partial<UrlState>, { push = false } = {})
     next.project = partial.doc.split('/')[0]!;
   }
   const params = new URLSearchParams();
-  if (next.preview) {
-    params.set('preview', '1');
+  if (next.mode !== 'edit') {
+    params.set('mode', next.mode);
   }
   if (next.comment) {
     params.set('comment', next.comment);
