@@ -703,20 +703,51 @@ test(
 );
 
 test(
-  'project search finds a document by its content and opens it',
+  'the ⌘K palette jumps to documents, searches text, and runs actions (keyboard-driven)',
   async () => {
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
     await page.goto(`${server.url}/main/demo.md?name=Human`);
     await waitForText('.cm-content', 'Demo document');
 
-    await page.fill('#doc-search', 'First note');
-    await page.waitForSelector('#search-results:not([hidden]) .search-hit');
-    expect(await page.textContent('#search-results .search-hit')).toInclude('demo.md');
+    // Open with the keyboard shortcut; documents load in.
+    await page.keyboard.press(`${mod}+k`);
+    await page.waitForSelector('#palette:not([hidden])');
+    await page.waitForSelector('.palette-item');
 
-    // Clicking a hit opens that document and dismisses the results.
-    await page.click('#search-results .search-hit');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
-    await page.waitForSelector('#search-results', { state: 'hidden' });
-    expect(await page.inputValue('#doc-search')).toBe('');
+    // Keyboard nav: the first row is selected, ArrowDown moves the selection.
+    await page.waitForSelector('.palette-item.selected[data-index="0"]');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForSelector('.palette-item.selected[data-index="1"]');
+
+    // Filter to a document by path, then open it with Enter (keyboard-only).
+    await page.fill('#palette-input', 'other');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.palette-item-sub')].some((el) => el.textContent?.includes('other.md')),
+    );
+    await page.waitForSelector('.palette-item.selected');
+    await page.keyboard.press('Enter');
+    await waitForPath('main/other.md');
+    await page.waitForSelector('#palette', { state: 'hidden' });
+
+    // A full-text query (≥3 chars) adds an "In text" section for the current project.
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+    await page.keyboard.press(`${mod}+k`);
+    await page.waitForSelector('#palette:not([hidden])');
+    await page.fill('#palette-input', 'Notes');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.palette-section')].some((el) => el.textContent?.startsWith('In text')),
+    );
+
+    // An action: filter to Settings and click it (mouse path) → navigates.
+    await page.fill('#palette-input', 'Settings');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.palette-item-label')].some((el) => el.textContent === 'Settings'),
+    );
+    await page.click('.palette-item:has(.palette-item-label:text-is("Settings"))');
+    await waitForPath('settings');
+    await page.waitForSelector('#surface:not([hidden]) .settings');
+    await page.waitForSelector('#palette', { state: 'hidden' });
   },
   30_000,
 );

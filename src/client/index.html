@@ -21,6 +21,10 @@
             <span class="nav-icon">☰</span><span class="nav-label">Inbox</span>
             <span id="inbox-badge" class="nav-badge" hidden></span>
           </button>
+          <button id="nav-search" type="button" class="nav-item">
+            <span class="nav-icon">⌕</span><span class="nav-label">Search</span>
+            <span class="nav-shortcut">⌘K</span>
+          </button>
         </nav>
         <div id="project-section" hidden>
           <div id="project-bar">
@@ -39,9 +43,7 @@
           <button id="nav-agents" type="button" class="nav-item">
             <span class="nav-icon">🤖</span><span class="nav-label">Agents</span>
           </button>
-          <input id="doc-search" type="search" placeholder="Search this project…" autocomplete="off" />
           <ul id="doc-list"></ul>
-          <div id="search-results" hidden></div>
           <button id="doc-new" type="button" title="Create a document in this project">＋ new document</button>
         </div>
         <div id="me" hidden>
@@ -130,6 +132,12 @@
           <button type="submit" id="versions-save">Save current version</button>
         </form>
         <div id="versions-list"></div>
+      </div>
+    </div>
+    <div id="palette" hidden>
+      <div id="palette-panel">
+        <input id="palette-input" type="text" placeholder="Search documents, or type a command…" autocomplete="off" spellcheck="false" />
+        <div id="palette-results"></div>
       </div>
     </div>
     <div id="dialog" hidden>

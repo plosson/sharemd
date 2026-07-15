@@ -137,16 +137,27 @@ export function askConfirm(options: AskConfirmOptions): Promise<boolean> {
   });
 }
 
-export function toast(message: string, options: { tone?: 'ok' | 'error' } = {}): void {
+export function toast(
+  message: string,
+  options: { tone?: 'ok' | 'error'; onClick?: () => void } = {},
+): void {
   const el = document.createElement('div');
   el.className = `toast toast-${options.tone ?? 'ok'}`;
   el.textContent = message;
+  const dismiss = () => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 300);
+  };
+  if (options.onClick) {
+    el.classList.add('clickable');
+    el.addEventListener('click', () => {
+      options.onClick!();
+      dismiss();
+    });
+  }
   tray.appendChild(el);
   // Force a reflow so the entrance transition runs from the initial state.
   void el.offsetWidth;
   el.classList.add('show');
-  setTimeout(() => {
-    el.classList.remove('show');
-    setTimeout(() => el.remove(), 300);
-  }, 3000);
+  setTimeout(dismiss, 3000);
 }

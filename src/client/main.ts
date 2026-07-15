@@ -20,12 +20,14 @@ import {
   writeView,
   type DocViewState,
   type View,
+  type ViewMode,
 } from './url-state';
 import { askChoice, askConfirm, askText, toast } from './dialogs';
 import { renderHome } from './home';
 import { renderAgents } from './agents';
 import { renderSettings } from './settings';
 import { applyEditorPrefs } from './prefs';
+import { initPalette, openPalette } from './palette';
 import type { SurfaceContext } from './surface';
 import * as api from './api';
 import { TEXT_KEY, registerAuthor } from '../shared/blame';
@@ -129,7 +131,6 @@ const crumbTitleEl = document.querySelector('#crumb-title')!;
 const statusDot = document.querySelector('#status-dot')! as HTMLElement;
 const presenceEl = document.querySelector('#presence')!;
 const activityEl = document.querySelector('#activity')! as HTMLElement;
-const docSearch = document.querySelector('#doc-search')! as HTMLInputElement;
 const docNewButton = document.querySelector('#doc-new')! as HTMLButtonElement;
 const projectMenuEl = document.querySelector('#project-menu')! as HTMLElement;
 const surfaceEl = document.querySelector('#surface')! as HTMLElement;
@@ -176,77 +177,6 @@ document.querySelector('#history-open')!.addEventListener('click', () => {
 document.querySelector('#versions-open')!.addEventListener('click', () => {
   if (currentPath) {
     void openVersions(currentPath, user.name);
-  }
-});
-
-const searchResults = document.querySelector('#search-results')!;
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-
-function clearSearch() {
-  docSearch.value = '';
-  searchResults.innerHTML = '';
-  searchResults.hidden = true;
-  docList.hidden = false;
-}
-
-async function runSearch(query: string): Promise<void> {
-  const trimmed = query.trim();
-  if (!currentProject || !trimmed) {
-    searchResults.hidden = true;
-    searchResults.innerHTML = '';
-    docList.hidden = false;
-    return;
-  }
-  let matches: api.SearchMatch[];
-  try {
-    matches = await api.searchProject(currentProject, trimmed);
-  } catch {
-    return;
-  }
-  // A slower query can resolve after the box changed — ignore stale results.
-  if (docSearch.value.trim() !== trimmed) {
-    return;
-  }
-  docList.hidden = true;
-  searchResults.hidden = false;
-  searchResults.innerHTML = '';
-  if (matches.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'search-empty';
-    empty.textContent = 'No matches.';
-    searchResults.appendChild(empty);
-    return;
-  }
-  for (const match of matches) {
-    const full = `${currentProject}/${match.doc}`;
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'search-hit';
-    const where = document.createElement('span');
-    where.className = 'search-where';
-    where.textContent = `${match.doc}:${match.line}`;
-    const snip = document.createElement('span');
-    snip.className = 'search-snippet';
-    snip.textContent = match.snippet;
-    row.append(where, snip);
-    row.addEventListener('click', () => {
-      clearSearch();
-      openDocument(full);
-    });
-    searchResults.appendChild(row);
-  }
-}
-
-docSearch.addEventListener('input', () => {
-  const query = docSearch.value;
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-  }
-  searchTimer = setTimeout(() => void runSearch(query), 200);
-});
-docSearch.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    clearSearch();
   }
 });
 
@@ -532,7 +462,6 @@ function renderDocList() {
 
 async function loadProject(project: string | null): Promise<void> {
   currentProject = project;
-  clearSearch();
   docs = project ? await fetchDocs(project) : [];
   renderProjectSelect();
   renderDocList();
@@ -867,6 +796,58 @@ async function deleteDocFlow(): Promise<void> {
   });
 }
 
+// ── palette actions (⌘K) ──────────────────────────────────────────────────
+
+/** Cycle the doc-view mode Edit → Both → Read via the existing mode buttons. */
+function cycleMode(): void {
+  if (!currentPath) {
+    toast('Open a document first.', { tone: 'error' });
+    return;
+  }
+  const order: ViewMode[] = ['edit', 'both', 'read'];
+  const next = order[(order.indexOf(readDocViewState().mode) + 1) % order.length]!;
+  (document.querySelector(`#mode-${next}`) as HTMLButtonElement).click();
+}
+
+/** Copy the current project's MCP wiring command to the clipboard. */
+async function copyMcpConfig(): Promise<void> {
+  if (!currentProject) {
+    toast('Open a project first.', { tone: 'error' });
+    return;
+  }
+  try {
+    const config = await api.getMcpConfig(currentProject, `${user.name}/claude`);
+    await navigator.clipboard.writeText(config.configure);
+    toast('MCP config copied');
+  } catch {
+    toast('Could not copy the MCP config.', { tone: 'error' });
+  }
+}
+
+/** Route "Connect an agent" to a project's Agents page, asking which when several. */
+async function connectAgentFlow(): Promise<void> {
+  if (currentProject) {
+    go({ kind: 'agents', project: currentProject });
+    return;
+  }
+  if (projects.length === 0) {
+    toast('Create a project first.', { tone: 'error' });
+    return;
+  }
+  if (projects.length === 1) {
+    go({ kind: 'agents', project: projects[0]! });
+    return;
+  }
+  const project = await askChoice({
+    title: 'Connect an agent to…',
+    hint: 'Pick the project the agent should join.',
+    options: projects.map((name) => ({ value: name, label: name })),
+  });
+  if (project) {
+    go({ kind: 'agents', project });
+  }
+}
+
 /** A plain-DOM dropdown: toggle button + positioned list, closes on outside click / Escape. */
 function wireMenu(menuSelector: string): void {
   const menu = document.querySelector(menuSelector)! as HTMLElement;
@@ -926,6 +907,7 @@ function wireCrud() {
     }
   });
   settingsButton.addEventListener('click', () => go({ kind: 'settings' }));
+  document.querySelector('#nav-search')!.addEventListener('click', () => openPalette());
   document.querySelector('#logout')!.addEventListener('click', logoutNow);
 
   // A project created (or removed) in another tab should appear on return; the
@@ -981,6 +963,16 @@ async function init() {
   projects = await api.listProjects();
   await navigate();
   wireCrud();
+  initPalette({
+    projects: () => projects,
+    currentProject: () => currentProject,
+    go,
+    newDocument: () => void newDocFlow(),
+    newProject: () => void newProjectFlow(),
+    connectAgent: () => void connectAgentFlow(),
+    toggleMode: cycleMode,
+    copyMcpConfig: () => void copyMcpConfig(),
+  });
   void refreshInboxBadge();
   // Back/forward and hand-edited URLs resolve the same way as the boot path.
   onUrlChange(() => void navigate());
