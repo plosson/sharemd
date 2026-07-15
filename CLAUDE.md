@@ -109,6 +109,11 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
 
 ## MCP config for an agent
 
+`GET /api/projects/<p>/mcp-config?username=<owner/agent>` returns all of the below
+ready-made (install one-liner, `mcp install` command, `.mcp.json` entry) with the
+caller-visible server URL; the web UI's 🤖 button in the project bar shows it with
+copy buttons.
+
 Easiest — install the binary from a running server, then wire the project:
 
 ```sh

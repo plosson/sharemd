@@ -5,6 +5,16 @@ All notable changes to mdio are documented here. The format follows
 releases yet, so entries are grouped by milestone date. Semantic version
 headers start with the first tagged release.
 
+## Unreleased
+
+### Added
+- **Per-project MCP config** — `GET /api/projects/:p/mcp-config?username=`
+  returns everything needed to wire an agent into a project (binary install
+  one-liner, `mdio mcp install … --project` command, and the ready-to-paste
+  `.mcp.json` entry), rendered with the caller-visible server URL
+  (reverse-proxy aware). The web UI's 🤖 button in the project bar shows it
+  with copy buttons, suggesting `<you>/claude` as the agent identity.
+
 ## 2026-07-15 — Agent collaboration suite (PR #9)
 
 ### Added

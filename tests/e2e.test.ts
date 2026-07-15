@@ -725,3 +725,23 @@ test(
   },
   30_000,
 );
+
+test(
+  'the project MCP-config dialog shows copyable wiring for an agent',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await page.waitForSelector('.cm-content');
+
+    await page.click('#project-mcp');
+    await page.waitForSelector('#mcp-config:not([hidden]) .mcp-block pre');
+    const body = (await page.textContent('#mcp-config-body'))!;
+    expect(body).toInclude('install.sh'); // the binary install one-liner
+    expect(body).toInclude('--project main'); // the mdio mcp install command
+    expect(body).toInclude('"MDIO_PROJECT": "main"'); // the raw .mcp.json entry
+    expect(body).toInclude('Human/claude'); // owner/agent suggested from the login
+
+    await page.click('#mcp-config-close');
+    await page.waitForSelector('#mcp-config', { state: 'hidden' });
+  },
+  30_000,
+);

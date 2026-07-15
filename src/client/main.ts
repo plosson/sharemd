@@ -8,6 +8,7 @@ import { commentHighlightExtension, focusThread, setShowResolved, wireComments }
 import { setPreviewEnabled, wirePreview } from './preview';
 import { closeHistory, openHistory } from './history';
 import { closeVersions, openVersions } from './versions';
+import { openMcpConfig } from './mcp-config';
 import { suggestionHighlightExtension, wireSuggestions } from './suggestions';
 import { onUrlChange, readUrlState, writeUrlState, type UrlState } from './url-state';
 import * as api from './api';
@@ -418,6 +419,14 @@ function wireCrud() {
       closeDocument();
       writeUrlState({ doc: null, project: currentProject, comment: null }, { push: true });
     }
+  });
+
+  document.querySelector('#project-mcp')!.addEventListener('click', () => {
+    if (!currentProject) {
+      return;
+    }
+    // Humans can't contain "/", so <me>/claude is a valid owner/agent suggestion.
+    void openMcpConfig(currentProject, `${user.name}/claude`);
   });
 
   document.querySelector('#project-new')!.addEventListener('click', () => {

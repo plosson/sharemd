@@ -102,3 +102,18 @@ export function restoreSnapshot(
     author,
   });
 }
+
+/** Ready-to-paste MCP wiring for a project, rendered with the server's public origin. */
+export interface McpConfig {
+  project: string;
+  server: string;
+  username: string;
+  install: string;
+  configure: string;
+  mcpServers: Record<string, unknown>;
+}
+
+export function getMcpConfig(project: string, username: string): Promise<McpConfig> {
+  const url = `/api/projects/${encodeURIComponent(project)}/mcp-config?username=${encodeURIComponent(username)}`;
+  return api('GET', url);
+}

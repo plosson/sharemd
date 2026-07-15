@@ -7,6 +7,7 @@
 //   DELETE /api/projects/:p                       delete a project (docs included)
 //   GET    /api/projects/:p/mentions   ?who&open  open threads @mentioning a peer (all docs)
 //   GET    /api/projects/:p/search     ?q&limit   full-text search across the project
+//   GET    /api/projects/:p/mcp-config ?username  ready-to-paste MCP wiring for this project
 //   GET    /api/projects/:p/docs                  list documents (project-relative)
 //   POST   /api/projects/:p/docs    {path}        create an empty document
 //   PATCH  /api/projects/:p/docs/*d {project?, path?}  rename / move a document
@@ -21,7 +22,9 @@
 import * as Y from 'yjs';
 import { blameLines, TEXT_KEY } from '../shared/blame';
 import { listThreads } from '../shared/comments';
+import { parseUsername } from '../mcp/identity';
 import { ConflictError, NotFoundError, type StoredSnapshot, type Vault } from './vault';
+import { publicOrigin } from './cli-routes';
 import type { RoomRegistry } from './rooms';
 
 export function apiError(error: unknown): Response {
@@ -358,6 +361,35 @@ export async function handleProjectsApi(
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
     const matches = await searchProject(vault, registry, project, query, limit);
     return Response.json({ project, query, matches });
+  }
+
+  // /api/projects/:p/mcp-config?username=<owner/agent> — everything needed to
+  // wire an MCP peer to this project, rendered with the caller-visible origin
+  // (reverse-proxy aware, like /install.sh).
+  if (segments[3] === 'mcp-config' && segments.length === 4) {
+    if (req.method !== 'GET') {
+      return methodNotAllowed();
+    }
+    if (!(await vault.listProjects()).includes(project)) {
+      throw new NotFoundError(`Project "${project}" does not exist.`);
+    }
+    const username = url.searchParams.get('username') || 'you/agent';
+    parseUsername(username); // same validation the MCP applies at startup → 400
+    const server = publicOrigin(req, url);
+    return Response.json({
+      project,
+      server,
+      username,
+      install: `curl -fsSL ${server}/install.sh | sh`,
+      configure: `mdio mcp install --server ${server} --username ${username} --project ${project} && mdio skill install`,
+      mcpServers: {
+        mdio: {
+          command: 'mdio',
+          args: ['mcp'],
+          env: { MDIO_SERVER: server, MDIO_USERNAME: username, MDIO_PROJECT: project },
+        },
+      },
+    });
   }
 
   if (segments[3] !== 'docs') {

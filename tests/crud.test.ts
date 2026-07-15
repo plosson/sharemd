@@ -405,3 +405,50 @@ describe('project search', () => {
     expect((await call('GET', '/api/projects/no-such-project/search?q=x')).status).toBe(404);
   });
 });
+
+describe('project mcp config', () => {
+  interface McpConfig {
+    project: string;
+    server: string;
+    username: string;
+    install: string;
+    configure: string;
+    mcpServers: { mdio: { command: string; args: string[]; env: Record<string, string> } };
+  }
+
+  test('returns ready-to-paste wiring scoped to the project', async () => {
+    await apiCreateProject(server, 'wired');
+    const response = await call('GET', '/api/projects/wired/mcp-config?username=plosson/claude');
+    expect(response.status).toBe(200);
+    const config = (await response.json()) as McpConfig;
+    expect(config.mcpServers.mdio.command).toBe('mdio');
+    expect(config.mcpServers.mdio.args).toEqual(['mcp']);
+    expect(config.mcpServers.mdio.env).toEqual({
+      MDIO_SERVER: server.url,
+      MDIO_USERNAME: 'plosson/claude',
+      MDIO_PROJECT: 'wired',
+    });
+    expect(config.install).toInclude(`${server.url}/install.sh`);
+    expect(config.configure).toInclude('--project wired');
+    expect(config.configure).toInclude('--username plosson/claude');
+    expect(config.configure).toInclude('mdio skill install');
+  });
+
+  test('advertises the reverse-proxied origin, not the bind address', async () => {
+    const response = await fetch(`${server.url}/api/projects/wired/mcp-config`, {
+      headers: { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'mdio.example.com' },
+    });
+    expect(response.status).toBe(200);
+    const config = (await response.json()) as McpConfig;
+    expect(config.server).toBe('https://mdio.example.com');
+    expect(config.mcpServers.mdio.env.MDIO_SERVER).toBe('https://mdio.example.com');
+    expect(config.username).toBe('you/agent'); // placeholder when none given
+  });
+
+  test('unknown project 404, invalid username 400, wrong method 405', async () => {
+    expect((await call('GET', '/api/projects/no-such-project/mcp-config')).status).toBe(404);
+    expect((await call('GET', '/api/projects/wired/mcp-config?username=a/b/c')).status).toBe(400);
+    expect((await call('GET', '/api/projects/wired/mcp-config?username=has%20space')).status).toBe(400);
+    expect((await call('POST', '/api/projects/wired/mcp-config', {})).status).toBe(405);
+  });
+});

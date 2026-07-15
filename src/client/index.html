@@ -15,6 +15,7 @@
           <button id="project-new" type="button" title="New project">＋</button>
           <button id="project-rename" type="button" title="Rename this project">✎</button>
           <button id="project-delete" type="button" title="Delete this project and all its documents">🗑</button>
+          <button id="project-mcp" type="button" title="MCP config to wire an agent into this project">🤖</button>
         </div>
         <input id="doc-search" type="search" placeholder="Search this project…" autocomplete="off" />
         <ul id="doc-list"></ul>
@@ -81,6 +82,15 @@
           <button type="submit">Save current version</button>
         </form>
         <div id="versions-list"></div>
+      </div>
+    </div>
+    <div id="mcp-config" hidden>
+      <div id="mcp-config-panel">
+        <header id="mcp-config-toolbar">
+          <span id="mcp-config-title"></span>
+          <button id="mcp-config-close" type="button" title="Close">✕</button>
+        </header>
+        <div id="mcp-config-body"></div>
       </div>
     </div>
     <div id="login" hidden>
