@@ -10,18 +10,39 @@ import * as api from './api';
 import { askChoice } from './dialogs';
 import { renderInbox } from './inbox';
 import type { SurfaceContext } from './surface';
-import { avatar, el, relativeTime } from './ui';
+import { activityLabel, avatar, el, relativeTime } from './ui';
 
 interface ProjectSummary {
   name: string;
   docs: api.DocMeta[];
   peers: api.ProjectPeer[];
+  activity: api.ActivityEvent[];
 }
 
 function greeting(name: string): string {
   const hour = new Date().getHours();
   const part = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   return `${part}, ${name}`;
+}
+
+function activityStrip(events: api.ActivityEvent[]): HTMLElement | null {
+  if (events.length === 0) {
+    return null;
+  }
+  // The last 3, newest first — a glanceable "what happened here lately".
+  const recent = events.slice(-3).reverse();
+  return el(
+    'div',
+    { class: 'card-activity' },
+    ...recent.map((event) =>
+      el(
+        'div',
+        { class: 'card-activity-row' },
+        el('span', { class: 'card-activity-actor', text: event.actor.split('/').pop() ?? event.actor }),
+        el('span', { class: 'card-activity-text', text: ` ${activityLabel(event.kind, event.detail)}` }),
+      ),
+    ),
+  );
 }
 
 function projectCard(summary: ProjectSummary, ctx: SurfaceContext): HTMLElement {
@@ -41,6 +62,7 @@ function projectCard(summary: ProjectSummary, ctx: SurfaceContext): HTMLElement 
       lastEdit ? el('span', { class: 'card-dot', text: '·' }) : null,
       lastEdit ? `edited ${relativeTime(lastEdit)}` : null,
     ),
+    activityStrip(summary.activity),
     faces,
   );
 }
@@ -130,11 +152,12 @@ export function renderHome(host: HTMLElement, ctx: SurfaceContext): void {
   void (async () => {
     const summaries: ProjectSummary[] = await Promise.all(
       ctx.projects.map(async (name) => {
-        const [docs, peers] = await Promise.all([
+        const [docs, peers, activity] = await Promise.all([
           api.listDocs(name).catch(() => [] as api.DocMeta[]),
           api.getPeers(name).catch(() => [] as api.ProjectPeer[]),
+          api.getActivity(name).catch(() => [] as api.ActivityEvent[]),
         ]);
-        return { name, docs, peers };
+        return { name, docs, peers, activity };
       }),
     );
     const docCount = summaries.reduce((sum, s) => sum + s.docs.length, 0);

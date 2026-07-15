@@ -11,7 +11,10 @@ import * as api from './api';
 import { toast } from './dialogs';
 import { parseUsername } from '../mcp/identity';
 import type { SurfaceContext } from './surface';
-import { avatar, commandBlock, el } from './ui';
+import { activityLabel, avatar, commandBlock, el, relativeTime } from './ui';
+
+/** How many recent events the Agents-page activity feed shows (newest first). */
+const ACTIVITY_LIMIT = 40;
 
 const POLL_MS = 3000;
 
@@ -110,6 +113,7 @@ export function renderAgents(host: HTMLElement, ctx: SurfaceContext, project: st
     disclosure.append(el('summary', { text: 'Paste the .mcp.json entry yourself' }), jsonHost);
 
     const peersList = el('div', { class: 'agents-peers' });
+    const activityList = el('div', { class: 'agents-activity' });
     let connected = false;
 
     renderCommands();
@@ -132,7 +136,45 @@ export function renderAgents(host: HTMLElement, ctx: SurfaceContext, project: st
       disclosure,
       status,
       el('section', { class: 'agents-section' }, el('h2', { text: 'Connected agents' }), peersList),
+      el('section', { class: 'agents-section' }, el('h2', { text: 'Recent activity' }), activityList),
     );
+
+    const renderActivity = (events: api.ActivityEvent[]) => {
+      if (events.length === 0) {
+        activityList.replaceChildren(
+          el('p', { class: 'agents-empty', text: 'No activity yet — it appears here as agents join and edit.' }),
+        );
+        return;
+      }
+      // Newest first, capped; the server keeps chronological order.
+      const recent = events.slice(-ACTIVITY_LIMIT).reverse();
+      activityList.replaceChildren(
+        ...recent.map((event) =>
+          el(
+            'div',
+            { class: 'activity-row' },
+            avatar({ name: event.actor, role: event.role }),
+            el(
+              'div',
+              { class: 'activity-main' },
+              el(
+                'span',
+                { class: 'activity-text' },
+                el('span', { class: 'activity-actor', text: event.actor }),
+                ` ${activityLabel(event.kind, event.detail)} in `,
+                el('button', {
+                  class: 'activity-doc',
+                  type: 'button',
+                  text: event.doc,
+                  onClick: () => ctx.go({ kind: 'doc', project, doc: `${project}/${event.doc}` }),
+                }),
+              ),
+              el('span', { class: 'activity-time', text: relativeTime(event.ts) }),
+            ),
+          ),
+        ),
+      );
+    };
 
     const renderPeers = (peers: api.ProjectPeer[]) => {
       if (peers.length === 0) {
@@ -169,6 +211,7 @@ export function renderAgents(host: HTMLElement, ctx: SurfaceContext, project: st
         return;
       }
       renderPeers(peers);
+      await api.getActivity(project).then(renderActivity).catch(() => {});
       const match = peers.find((peer) => peer.name === identity);
       if (match && !connected) {
         connected = true;

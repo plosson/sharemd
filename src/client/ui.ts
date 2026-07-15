@@ -48,6 +48,38 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** A one-line human phrase for an activity event kind (feeds on Home + Agents). */
+export function activityLabel(kind: string, detail?: string): string {
+  switch (kind) {
+    case 'joined':
+      return 'joined';
+    case 'left':
+      return 'left';
+    case 'writing':
+      return detail ? `started writing in §${detail}` : 'started writing';
+    case 'finished':
+      return 'finished writing';
+    case 'suggested':
+      return 'suggested an edit';
+    case 'accepted':
+      return 'accepted a suggestion';
+    case 'rejected':
+      return 'rejected a suggestion';
+    case 'commented':
+      return 'commented';
+    case 'replied':
+      return 'replied';
+    case 'resolved':
+      return 'resolved a thread';
+    case 'saved':
+      return detail ? `saved version “${detail}”` : 'saved a version';
+    case 'restored':
+      return detail ? `restored version “${detail}”` : 'restored a version';
+    default:
+      return kind;
+  }
+}
+
 /** A compact relative time like "just now", "5m ago", "3d ago", or a date. */
 export function relativeTime(ms: number): string {
   const seconds = Math.round((Date.now() - ms) / 1000);

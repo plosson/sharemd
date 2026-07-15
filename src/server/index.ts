@@ -6,6 +6,7 @@ import { Room, RoomRegistry, type RoomSocket } from './rooms';
 import { NotFoundError, Vault } from './vault';
 import { apiError, handleProjectsApi } from './api';
 import { handleCliRoute } from './cli-routes';
+import { ActivityLog } from './activity';
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'client');
 
@@ -42,7 +43,8 @@ export async function startServer({
 }): Promise<MdioServer> {
   await mkdir(vaultDir, { recursive: true }); // fresh deploys start with an empty vault
   const vault = new Vault(vaultDir);
-  const registry = new RoomRegistry(vault);
+  const activity = new ActivityLog();
+  const registry = new RoomRegistry(vault, activity);
   const [clientBundle, indexHtml, styles] = await Promise.all([
     buildClient(),
     Bun.file(join(CLIENT_DIR, 'index.html')).text(),
@@ -71,7 +73,7 @@ export async function startServer({
       }
 
       try {
-        const apiResponse = await handleProjectsApi(req, url, vault, registry);
+        const apiResponse = await handleProjectsApi(req, url, vault, registry, activity);
         if (apiResponse) {
           return apiResponse;
         }

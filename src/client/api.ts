@@ -174,3 +174,31 @@ export interface ProjectPeer {
 export async function getPeers(project: string): Promise<ProjectPeer[]> {
   return (await api<{ peers: ProjectPeer[] }>('GET', `/api/projects/${encodeURIComponent(project)}/peers`)).peers;
 }
+
+/** One event in a project's ephemeral activity feed (see src/server/activity.ts). */
+export interface ActivityEvent {
+  ts: number;
+  actor: string;
+  role: 'human' | 'agent';
+  kind:
+    | 'joined'
+    | 'left'
+    | 'writing'
+    | 'finished'
+    | 'suggested'
+    | 'accepted'
+    | 'rejected'
+    | 'commented'
+    | 'replied'
+    | 'resolved'
+    | 'saved'
+    | 'restored';
+  /** Project-relative document path. */
+  doc: string;
+  detail?: string;
+}
+
+/** Recent activity for a project (chronological; ephemeral, resets on server restart). */
+export async function getActivity(project: string): Promise<ActivityEvent[]> {
+  return (await api<{ events: ActivityEvent[] }>('GET', `/api/projects/${encodeURIComponent(project)}/activity`)).events;
+}

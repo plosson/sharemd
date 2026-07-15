@@ -2163,6 +2163,86 @@ body {
   gap: 6px;
 }
 
+/* ── activity feed (Agents page) ─────────────────────────────────────────── */
+
+.agents-activity {
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-row:last-child {
+  border-bottom: none;
+}
+
+.activity-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-text {
+  font-size: 13px;
+  color: var(--ink-soft);
+  min-width: 0;
+}
+
+.activity-actor {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.activity-doc {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.activity-doc:hover {
+  text-decoration: underline;
+}
+
+.activity-time {
+  font-size: 12px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Compact "last 3 events" strip on Home project cards. */
+.card-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 2px;
+}
+
+.card-activity-row {
+  font-size: 12px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-activity-actor {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
 .agents-empty {
   font-size: 13px;
   color: var(--ink-faint);

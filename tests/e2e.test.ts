@@ -851,6 +851,34 @@ test(
 );
 
 test(
+  'the Agents page renders the activity feed of what agents did in the project',
+  async () => {
+    // Alice re-joins and proposes an edit so the feed has fresh events to show.
+    await alice.call('open_document', { path: 'demo.md' });
+    await alice.call('place_cursor', { boundary: 'end' });
+    await alice.call('insert_text', { text: '\nFEED_ANCHOR_WORD\n' });
+    const { matches } = await alice.call<{ matches: Array<{ matchId: string }> }>('search_text', {
+      query: 'FEED_ANCHOR_WORD',
+    });
+    await alice.call('suggest_replace', { matchId: matches[0]!.matchId, text: 'FEED_REPLACED_WORD' });
+
+    await page.goto(`${server.url}/main/agents?name=Human`);
+    await page.waitForSelector('#surface:not([hidden]) .agents');
+
+    // The feed (polled ~3s) lists activity attributed to alice, with a doc link.
+    await page.waitForSelector('.agents-activity .activity-row', { timeout: 15_000 });
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.agents-activity .activity-actor')].some(
+        (el) => el.textContent === 'plosson/alice',
+      ),
+    );
+    expect(await page.textContent('.agents-activity')).toInclude('suggested an edit');
+    expect(await page.locator('.agents-activity .activity-doc').first().textContent()).toContain('demo.md');
+  },
+  30_000,
+);
+
+test(
   'Home shows project cards and recents; a card opens the project',
   async () => {
     await page.goto(`${server.url}/?name=Human`);

@@ -9,6 +9,7 @@
 //   DELETE /api/projects/:p                       delete a project (docs included)
 //   GET    /api/projects/:p/mentions   ?who&open  open threads @mentioning a peer (all docs)
 //   GET    /api/projects/:p/peers                 connected peers in this project's open rooms
+//   GET    /api/projects/:p/activity              recent agent/human activity (ephemeral ring buffer)
 //   GET    /api/projects/:p/search     ?q&limit   full-text search across the project
 //   GET    /api/projects/:p/mcp-config ?username  ready-to-paste MCP wiring for this project
 //   GET    /api/projects/:p/docs                  list documents ({path, title, modified})
@@ -30,6 +31,7 @@ import { parseUsername } from '../mcp/identity';
 import { ConflictError, NotFoundError, type StoredSnapshot, type Vault } from './vault';
 import { publicOrigin } from './cli-routes';
 import type { RoomRegistry } from './rooms';
+import type { ActivityLog } from './activity';
 
 export function apiError(error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
@@ -325,6 +327,7 @@ async function handleSnapshots(
     restoreDoc.destroy();
     const room = await registry.open(docPath);
     const changed = room.restoreContent(content, { name: author, role: roleOf(author) });
+    room.recordVersion('restored', snapshot.label, author);
     return Response.json({ id: snapshot.id, label: snapshot.label, restoredChars: content.length, changed });
   }
 
@@ -351,6 +354,7 @@ async function handleSnapshots(
       };
       snapshots.push(snapshot);
       await vault.writeSnapshots(docPath, snapshots);
+      room.recordVersion('saved', label, author);
       return Response.json(snapshotMeta(snapshot), { status: 201 });
     }
     default:
@@ -367,6 +371,7 @@ export async function handleProjectsApi(
   url: URL,
   vault: Vault,
   registry: RoomRegistry,
+  activity?: ActivityLog,
 ): Promise<Response | null> {
   const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (segments[0] !== 'api') {
@@ -467,6 +472,19 @@ export async function handleProjectsApi(
       }
     }
     return Response.json({ project, peers: [...byName.values()] });
+  }
+
+  // /api/projects/:p/activity — recent agent/human activity for the project.
+  // Read-only and ephemeral: an in-memory ring buffer that never opens a room
+  // and resets on restart (see ActivityLog). Chronological order (oldest first).
+  if (segments[3] === 'activity' && segments.length === 4) {
+    if (req.method !== 'GET') {
+      return methodNotAllowed();
+    }
+    if (!(await vault.listProjects()).includes(project)) {
+      throw new NotFoundError(`Project "${project}" does not exist.`);
+    }
+    return Response.json({ project, events: activity?.list(project) ?? [] });
   }
 
   // /api/projects/:p/search?q=<text>&limit=<n> — full text across the project.

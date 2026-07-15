@@ -5,6 +5,9 @@ import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import { NotFoundError, type Vault } from './vault';
 import { TEXT_KEY, registerAuthor, type AuthorInfo } from '../shared/blame';
+import { listSuggestions, SUGGESTIONS_KEY, type SuggestionStatus } from '../shared/suggestions';
+import { COMMENTS_KEY, listThreads } from '../shared/comments';
+import { ActivityLog, roleOfName, type ActivityKind } from './activity';
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
@@ -76,6 +79,7 @@ export class Room {
     readonly name: string,
     private readonly vault: Vault,
     private readonly persistDebounceMs: number,
+    private readonly activity: ActivityLog | null = null,
   ) {
     this.awareness.setLocalState(null);
 
@@ -113,8 +117,13 @@ export class Room {
     );
   }
 
-  static async open(name: string, vault: Vault, persistDebounceMs: number): Promise<Room> {
-    const room = new Room(name, vault, persistDebounceMs);
+  static async open(
+    name: string,
+    vault: Vault,
+    persistDebounceMs: number,
+    activity: ActivityLog | null = null,
+  ): Promise<Room> {
+    const room = new Room(name, vault, persistDebounceMs, activity);
     const [content, state] = await Promise.all([vault.read(name), vault.readState(name)]);
 
     let hydratedFromState = false;
@@ -154,7 +163,160 @@ export class Room {
       await vault.resetLog(name, Date.now(), Y.encodeStateAsUpdate(room.doc));
       room.logEnabled = true;
     }
+    // Wire the activity observers only after hydration/reconcile, so pre-existing
+    // suggestions and comments loaded from disk don't replay as fresh events.
+    if (activity) {
+      room.wireActivity(activity);
+    }
     return room;
+  }
+
+  /** The project a room belongs to — the first segment of its `project/doc` name. */
+  private get project(): string {
+    const slash = this.name.indexOf('/');
+    return slash < 0 ? this.name : this.name.slice(0, slash);
+  }
+
+  /** The project-relative document path — the room name minus its project prefix. */
+  private get relDoc(): string {
+    const slash = this.name.indexOf('/');
+    return slash < 0 ? this.name : this.name.slice(slash + 1);
+  }
+
+  /** Attribute a doc-map mutation (comment resolve) to the socket that applied it. */
+  private actorFromOrigin(origin: unknown): { name: string; role: 'human' | 'agent' } | null {
+    const controlled = this.sockets.get(origin as RoomSocket);
+    if (!controlled) {
+      return null;
+    }
+    for (const id of controlled) {
+      const state = this.awareness.getStates().get(id) as { user?: { name?: string; role?: string } } | undefined;
+      const name = state?.user?.name;
+      if (name) {
+        return { name, role: state!.user!.role === 'agent' ? 'agent' : 'human' };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Emit activity events from the signals already flowing through this room:
+   * awareness (join/leave, composing↔idle) and the suggestions/comments map
+   * observers. These live on the room's own doc/awareness, so they die with it.
+   */
+  private wireActivity(activity: ActivityLog): void {
+    const project = this.project;
+    const doc = this.relDoc;
+    const record = (event: { actor: string; role: 'human' | 'agent'; kind: ActivityKind; detail?: string }) => {
+      activity.record(project, { doc, ...event });
+    };
+
+    // join / leave / composing transitions, tracked per awareness clientID.
+    const peers = new Map<number, { name: string; role: 'human' | 'agent'; status?: string }>();
+    this.awareness.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
+      for (const id of added.concat(updated)) {
+        const state = this.awareness.getStates().get(id) as
+          | { user?: { name?: string; role?: string; status?: string; section?: string | null } }
+          | undefined;
+        const user = state?.user;
+        if (!user?.name) {
+          peers.delete(id);
+          continue;
+        }
+        const role = user.role === 'agent' ? 'agent' : 'human';
+        const prev = peers.get(id);
+        if (!prev) {
+          record({ actor: user.name, role, kind: 'joined' });
+        } else {
+          const was = prev.status === 'composing';
+          const now = user.status === 'composing';
+          if (!was && now) {
+            record({ actor: user.name, role, kind: 'writing', detail: user.section ?? undefined });
+          } else if (was && !now) {
+            record({ actor: user.name, role, kind: 'finished' });
+          }
+        }
+        peers.set(id, { name: user.name, role, status: user.status });
+      }
+      for (const id of removed) {
+        const prev = peers.get(id);
+        if (prev) {
+          record({ actor: prev.name, role: prev.role, kind: 'left' });
+          peers.delete(id);
+        }
+      }
+    });
+
+    // Suggestions: new proposals, and pending→accepted/rejected resolutions.
+    const suggestions = this.doc.getMap(SUGGESTIONS_KEY);
+    const suggestStatus = new Map<string, SuggestionStatus>();
+    for (const suggestion of listSuggestions(this.doc)) {
+      suggestStatus.set(suggestion.id, suggestion.status);
+    }
+    suggestions.observeDeep(() => {
+      for (const suggestion of listSuggestions(this.doc)) {
+        const prev = suggestStatus.get(suggestion.id);
+        if (prev === undefined) {
+          if (suggestion.status === 'pending') {
+            record({ actor: suggestion.author, role: roleOfName(suggestion.author), kind: 'suggested' });
+          }
+        } else if (prev === 'pending' && suggestion.status !== 'pending') {
+          const actor = suggestion.resolvedBy ?? '';
+          record({ actor, role: roleOfName(actor), kind: suggestion.status === 'accepted' ? 'accepted' : 'rejected' });
+        }
+        suggestStatus.set(suggestion.id, suggestion.status);
+      }
+      for (const id of [...suggestStatus.keys()]) {
+        if (!suggestions.has(id)) {
+          suggestStatus.delete(id);
+        }
+      }
+    });
+
+    // Comments: new root comments / replies (actor from the stored author), and
+    // resolve transitions (actor from the socket that applied the change).
+    const comments = this.doc.getMap<Y.Map<unknown>>(COMMENTS_KEY);
+    const knownComments = new Set<string>(comments.keys());
+    const resolvedState = new Map<string, boolean>();
+    for (const thread of listThreads(this.doc)) {
+      resolvedState.set(thread.root.id, thread.resolved);
+    }
+    comments.observeDeep((_events, transaction) => {
+      for (const [id, fields] of comments.entries()) {
+        if (!knownComments.has(id)) {
+          knownComments.add(id);
+          const author = (fields.get('author') as string) ?? '';
+          const isReply = fields.get('parentId') !== null && fields.get('parentId') !== undefined;
+          record({ actor: author, role: roleOfName(author), kind: isReply ? 'replied' : 'commented' });
+        }
+      }
+      for (const thread of listThreads(this.doc)) {
+        const prev = resolvedState.get(thread.root.id);
+        if (prev !== undefined && !prev && thread.resolved) {
+          const actor = this.actorFromOrigin(transaction.origin);
+          if (actor) {
+            record({ actor: actor.name, role: actor.role, kind: 'resolved' });
+          }
+        }
+        resolvedState.set(thread.root.id, thread.resolved);
+      }
+      for (const id of [...knownComments]) {
+        if (!comments.has(id)) {
+          knownComments.delete(id);
+        }
+      }
+    });
+  }
+
+  /** Record a version save/restore (driven from the api.ts snapshot handlers). */
+  recordVersion(kind: 'saved' | 'restored', label: string, author: string): void {
+    this.activity?.record(this.project, {
+      doc: this.relDoc,
+      actor: author,
+      role: roleOfName(author),
+      kind,
+      detail: label,
+    });
   }
 
   /** Full CRDT state for a named snapshot (includes authorship + comments). */
@@ -354,6 +516,7 @@ export class RoomRegistry {
 
   constructor(
     private readonly vault: Vault,
+    private readonly activity: ActivityLog | null = null,
     private readonly persistDebounceMs = 400,
   ) {}
 
@@ -372,7 +535,7 @@ export class RoomRegistry {
         if (!(await this.vault.exists(name))) {
           throw new NotFoundError(`Document "${name}" does not exist.`);
         }
-        return Room.open(name, this.vault, this.persistDebounceMs);
+        return Room.open(name, this.vault, this.persistDebounceMs, this.activity);
       })();
       room.then(
         (settled) => {
