@@ -722,7 +722,7 @@ test(
 );
 
 test(
-  'an agent proposes a suggested edit and the human accepts it in the browser',
+  'an agent proposes a suggested edit; the human accepts it via the inline popover',
   async () => {
     await page.goto(`${server.url}/main/demo.md?name=Human`);
     await waitForText('.cm-content', 'Demo document');
@@ -737,17 +737,58 @@ test(
     });
     await alice.call('suggest_replace', { matchId: matches[0]!.matchId, text: 'REPLACED_WORD' });
 
-    // The human sees the suggestion panel, the inline highlight, and the proposal — text intact.
+    // The human sees the inline highlight and the rail retitled as bulk review — text intact.
     await page.waitForSelector('#suggestions-panel:not([hidden]) .suggest-card');
     await page.waitForSelector('.mdio-suggest-replace');
-    expect(await page.textContent('#suggestions-panel')).toInclude('REPLACED_WORD');
+    await waitForText('#suggestions-title', 'Review 1 suggestion');
     expect(await page.textContent('.cm-content')).toInclude('SUGGEST_TARGET_WORD');
 
-    // Accepting applies the change and empties the panel.
-    await page.click('#suggestions-panel .suggest-btn.primary');
+    // Clicking the marked range opens the anchored popover with the proposal.
+    await page.click('.mdio-suggest-replace');
+    await page.waitForSelector('.suggest-popover');
+    expect(await page.textContent('.suggest-popover')).toInclude('plosson/alice');
+    expect(await page.textContent('.suggest-popover')).toInclude('REPLACED_WORD');
+
+    // Accepting from the popover applies the change and dismisses everything.
+    await page.click('.suggest-popover .suggest-btn.primary');
     await page.waitForFunction(() => {
       const text = document.querySelector('.cm-content')?.textContent ?? '';
       return text.includes('REPLACED_WORD') && !text.includes('SUGGEST_TARGET_WORD');
+    });
+    await page.waitForSelector('.suggest-popover', { state: 'hidden' });
+    await page.waitForSelector('#suggestions-panel', { state: 'hidden' });
+  },
+  30_000,
+);
+
+test(
+  'bulk review: Accept all applies every pending suggestion behind a danger confirm',
+  async () => {
+    await page.goto(`${server.url}/main/demo.md?name=Human`);
+    await waitForText('.cm-content', 'Demo document');
+    await alice.call('open_document', { path: 'demo.md' });
+
+    // Two independent insert suggestions at the document end.
+    await alice.call('place_cursor', { boundary: 'end' });
+    await alice.call('insert_text', { text: '\nBULK_ANCHOR_A\nBULK_ANCHOR_B\n' });
+    await waitForText('.cm-content', 'BULK_ANCHOR_B');
+    const a = await alice.call<{ matches: Array<{ matchId: string }> }>('search_text', { query: 'BULK_ANCHOR_A' });
+    await alice.call('suggest_insert', { matchId: a.matches[0]!.matchId, edge: 'end', text: ' BULK_ADDED_A' });
+    const b = await alice.call<{ matches: Array<{ matchId: string }> }>('search_text', { query: 'BULK_ANCHOR_B' });
+    await alice.call('suggest_insert', { matchId: b.matches[0]!.matchId, edge: 'end', text: ' BULK_ADDED_B' });
+
+    await waitForText('#suggestions-title', 'Review 2 suggestions');
+
+    // Accept all is gated by a danger confirm.
+    await page.click('#suggest-accept-all');
+    await page.waitForSelector('#dialog:not([hidden])');
+    expect(await page.textContent('#dialog-title')).toInclude('Accept all 2 suggestions');
+    await page.click('#dialog-confirm');
+
+    // Both proposals land in the text and the rail empties.
+    await page.waitForFunction(() => {
+      const text = document.querySelector('.cm-content')?.textContent ?? '';
+      return text.includes('BULK_ADDED_A') && text.includes('BULK_ADDED_B');
     });
     await page.waitForSelector('#suggestions-panel', { state: 'hidden' });
   },

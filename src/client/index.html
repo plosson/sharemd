@@ -93,7 +93,13 @@
             <div id="comments-list"></div>
           </aside>
           <aside id="suggestions-panel" hidden>
-            <header id="suggestions-header"><span>Suggested edits</span></header>
+            <header id="suggestions-header">
+              <span id="suggestions-title">Suggested edits</span>
+              <div id="suggestions-bulk">
+                <button id="suggest-accept-all" type="button" class="suggest-btn primary" title="Accept every pending suggestion">Accept all</button>
+                <button id="suggest-reject-all" type="button" class="suggest-btn" title="Reject every pending suggestion">Reject all</button>
+              </div>
+            </header>
             <div id="suggestions-list"></div>
           </aside>
         </div>
