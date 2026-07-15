@@ -209,8 +209,10 @@ describe('blame over HTTP', () => {
     alice.text.insert(0, 'force a sidecar write\n');
     await server.registry.flushAll();
 
-    const { docs } = (await (await fetch(`${server.url}/api/projects/main/docs`)).json()) as { docs: string[] };
-    expect(docs).toEqual(['demo.md', 'other.md']);
+    const { docs } = (await (await fetch(`${server.url}/api/projects/main/docs`)).json()) as {
+      docs: Array<{ path: string }>;
+    };
+    expect(docs.map((doc) => doc.path)).toEqual(['demo.md', 'other.md']);
     const { projects } = (await (await fetch(`${server.url}/api/projects`)).json()) as { projects: string[] };
     expect(projects).not.toContain(STATE_DIR);
   });
@@ -341,9 +343,9 @@ describe('blame persistence across restarts', () => {
     // orphaned sidecar must not bring it back.
     const restarted = await restartServer(vaultDir);
     const { docs } = (await (await fetch(`${restarted.url}/api/projects/main/docs`)).json()) as {
-      docs: string[];
+      docs: Array<{ path: string }>;
     };
-    expect(docs).toEqual(['other.md']);
+    expect(docs.map((doc) => doc.path)).toEqual(['other.md']);
     expect((await fetch(`${restarted.url}/ws/main/demo.md`)).status).toBe(404);
     expect((await fetch(`${restarted.url}/api/projects/main/docs/demo.md/blame`)).status).toBe(404);
   });

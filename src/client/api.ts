@@ -43,9 +43,16 @@ export function deleteProject(name: string): Promise<void> {
   return api('DELETE', `/api/projects/${encodeURIComponent(name)}`);
 }
 
-/** Documents of a project as project-relative paths. */
-export async function listDocs(project: string): Promise<string[]> {
-  return (await api<{ docs: string[] }>('GET', `/api/projects/${encodeURIComponent(project)}/docs`)).docs;
+/** A document with list metadata: project-relative path, first-heading title, mtime. */
+export interface DocMeta {
+  path: string;
+  title: string | null;
+  modified: number;
+}
+
+/** Documents of a project with metadata (title, mtime), project-relative paths. */
+export async function listDocs(project: string): Promise<DocMeta[]> {
+  return (await api<{ docs: DocMeta[] }>('GET', `/api/projects/${encodeURIComponent(project)}/docs`)).docs;
 }
 
 export function createDoc(project: string, path: string): Promise<{ path: string }> {
@@ -116,4 +123,53 @@ export interface McpConfig {
 export function getMcpConfig(project: string, username: string): Promise<McpConfig> {
   const url = `/api/projects/${encodeURIComponent(project)}/mcp-config?username=${encodeURIComponent(username)}`;
   return api('GET', url);
+}
+
+/** One open comment thread @mentioning a peer, located in a project/document. */
+export interface InboxMention {
+  project: string;
+  doc: string;
+  threadId: string;
+  quotedText: string;
+  currentText: string | null;
+  resolved: boolean;
+  request: { author: string; body: string; createdAt: number };
+  respondedByWho: boolean;
+}
+
+/** Per-document tally of suggested edits awaiting review. */
+export interface InboxSuggestions {
+  project: string;
+  doc: string;
+  pending: number;
+}
+
+export interface Inbox {
+  who: string;
+  mentions: InboxMention[];
+  suggestions: InboxSuggestions[];
+}
+
+/** The cross-project inbox for a peer (mentions + pending suggestions). */
+export function getInbox(who: string, { includeHandled = false } = {}): Promise<Inbox> {
+  const params = new URLSearchParams({ who });
+  if (includeHandled) {
+    params.set('open', 'false');
+  }
+  return api('GET', `/api/mentions?${params}`);
+}
+
+/** A peer connected to one of a project's open rooms. */
+export interface ProjectPeer {
+  name: string;
+  role: 'human' | 'agent';
+  color: string | null;
+  /** Project-relative document the peer is in. */
+  doc: string;
+  status: string | null;
+}
+
+/** Peers connected to a project right now (reads only already-open rooms). */
+export async function getPeers(project: string): Promise<ProjectPeer[]> {
+  return (await api<{ peers: ProjectPeer[] }>('GET', `/api/projects/${encodeURIComponent(project)}/peers`)).peers;
 }

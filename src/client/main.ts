@@ -438,9 +438,30 @@ function applyViewState(state: UrlState) {
   focusThread(state.comment);
 }
 
+/** A sidebar document entry: full vault path plus its list metadata. */
+interface SidebarDoc {
+  path: string;
+  title: string | null;
+  modified: number;
+}
+
 let projects: string[] = [];
 let currentProject: string | null = null;
-let docs: string[] = [];
+let docs: SidebarDoc[] = [];
+
+/** Full-path metadata for a project's documents (sidebar + navigation). */
+async function fetchDocs(project: string): Promise<SidebarDoc[]> {
+  return (await api.listDocs(project)).map((doc) => ({
+    path: `${project}/${doc.path}`,
+    title: doc.title,
+    modified: doc.modified,
+  }));
+}
+
+/** The label a document shows in lists: its first heading, else its filename. */
+function docLabel(doc: SidebarDoc): string {
+  return doc.title ?? doc.path.slice(doc.path.lastIndexOf('/') + 1);
+}
 
 /** Sidebar chrome that only makes sense inside a project (search, new-doc, ⋯). */
 function renderSidebar(): void {
@@ -467,13 +488,14 @@ function renderProjectSelect() {
 
 function renderDocList() {
   docList.innerHTML = '';
-  for (const path of docs) {
+  for (const doc of docs) {
     const item = document.createElement('li');
-    // The sidebar is scoped to one project — show paths without its prefix.
-    item.textContent = currentProject ? path.slice(currentProject.length + 1) : path;
-    item.dataset.path = path;
-    item.classList.toggle('active', path === currentPath);
-    item.addEventListener('click', () => openDocument(path));
+    // The sidebar shows the document's title (first heading), else its filename.
+    item.textContent = docLabel(doc);
+    item.dataset.path = doc.path;
+    item.title = doc.path;
+    item.classList.toggle('active', doc.path === currentPath);
+    item.addEventListener('click', () => openDocument(doc.path));
     docList.appendChild(item);
   }
 }
@@ -481,7 +503,7 @@ function renderDocList() {
 async function loadProject(project: string | null): Promise<void> {
   currentProject = project;
   clearSearch();
-  docs = project ? (await api.listDocs(project)).map((rel) => `${project}/${rel}`) : [];
+  docs = project ? await fetchDocs(project) : [];
   renderProjectSelect();
   renderDocList();
 }
@@ -492,7 +514,7 @@ async function navigate(state: UrlState, urlMode: 'replace' | 'none') {
   if (target !== currentProject) {
     await loadProject(target);
   }
-  const doc = state.doc && docs.includes(state.doc) ? state.doc : docs[0] ?? null;
+  const doc = state.doc && docs.some((d) => d.path === state.doc) ? state.doc : docs[0]?.path ?? null;
   if (doc && doc !== currentPath) {
     // A fallback doc must normalize the URL even on back/forward navigation,
     // or the address bar keeps the stale path.
@@ -507,7 +529,7 @@ async function navigate(state: UrlState, urlMode: 'replace' | 'none') {
 /** Open a project on the doc given (or its first doc), replacing the dead URL. */
 async function enterProject(project: string | null, doc?: string) {
   await loadProject(project);
-  const target = doc && docs.includes(doc) ? doc : docs[0];
+  const target = doc && docs.some((d) => d.path === doc) ? doc : docs[0]?.path;
   if (target) {
     openDocument(target, 'replace');
   } else {
@@ -535,7 +557,7 @@ async function refreshProjects(): Promise<void> {
   }
   projects = latest;
   if (currentProject && projects.includes(currentProject)) {
-    docs = (await api.listDocs(currentProject)).map((rel) => `${currentProject}/${rel}`);
+    docs = await fetchDocs(currentProject);
   }
   renderProjectSelect();
   renderDocList();
@@ -718,7 +740,7 @@ function wireCrud() {
   projectSelect.addEventListener('change', async () => {
     await loadProject(projectSelect.value);
     if (docs[0]) {
-      openDocument(docs[0]);
+      openDocument(docs[0].path);
     } else {
       closeDocument();
       writeUrlState({ doc: null, project: currentProject, comment: null }, { push: true });

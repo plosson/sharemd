@@ -96,8 +96,10 @@ export class AgentRuntime {
         response.status === 404 ? `project "${this.project}" does not exist on the server` : `HTTP ${response.status}`;
       throw new Error(`Failed to list documents: ${detail}`);
     }
-    const { docs } = (await response.json()) as { docs: string[] };
-    return docs;
+    // The list endpoint now returns per-doc metadata; agents only ever need the
+    // project-relative path, so flatten it back to the plain-string contract.
+    const { docs } = (await response.json()) as { docs: Array<{ path: string }> };
+    return docs.map((doc) => doc.path);
   }
 
   /**

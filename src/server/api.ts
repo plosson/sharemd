@@ -1,14 +1,17 @@
 // The REST surface for project/document CRUD. Live editing happens over
 // /ws/<project>/<doc-path>; everything lifecycle-shaped lives here:
 //
+//   GET    /api/mentions             ?who&open  open threads @mentioning a peer + pending
+//                                               suggestions, aggregated across all projects
 //   GET    /api/projects                          list projects
 //   POST   /api/projects            {name}        create a project
 //   PATCH  /api/projects/:p         {name}        rename a project
 //   DELETE /api/projects/:p                       delete a project (docs included)
 //   GET    /api/projects/:p/mentions   ?who&open  open threads @mentioning a peer (all docs)
+//   GET    /api/projects/:p/peers                 connected peers in this project's open rooms
 //   GET    /api/projects/:p/search     ?q&limit   full-text search across the project
 //   GET    /api/projects/:p/mcp-config ?username  ready-to-paste MCP wiring for this project
-//   GET    /api/projects/:p/docs                  list documents (project-relative)
+//   GET    /api/projects/:p/docs                  list documents ({path, title, modified})
 //   POST   /api/projects/:p/docs    {path}        create an empty document
 //   PATCH  /api/projects/:p/docs/*d {project?, path?}  rename / move a document
 //   DELETE /api/projects/:p/docs/*d               delete a document
@@ -22,6 +25,7 @@
 import * as Y from 'yjs';
 import { blameLines, TEXT_KEY } from '../shared/blame';
 import { listThreads } from '../shared/comments';
+import { listSuggestions } from '../shared/suggestions';
 import { parseUsername } from '../mcp/identity';
 import { ConflictError, NotFoundError, type StoredSnapshot, type Vault } from './vault';
 import { publicOrigin } from './cli-routes';
@@ -84,9 +88,7 @@ function methodNotAllowed(): Response {
   return Response.json({ error: 'Method not allowed' }, { status: 405 });
 }
 
-interface MentionEntry {
-  /** Project-relative document path the thread lives in. */
-  doc: string;
+interface ThreadMention {
   threadId: string;
   quotedText: string;
   /** Current anchored text, or null when the commented range was deleted (orphaned). */
@@ -96,6 +98,60 @@ interface MentionEntry {
   request: { author: string; body: string; createdAt: number };
   /** True once the peer has authored any comment in the thread. */
   respondedByWho: boolean;
+}
+
+/** A ThreadMention located in a specific document. */
+interface MentionEntry extends ThreadMention {
+  /** Project-relative document path the thread lives in. */
+  doc: string;
+}
+
+/** Cross-project mention: also carries the project the document lives in. */
+interface InboxMention extends MentionEntry {
+  project: string;
+}
+
+/** Per-doc pending-suggestion tally for the inbox. */
+interface InboxSuggestions {
+  project: string;
+  /** Project-relative document path. */
+  doc: string;
+  pending: number;
+}
+
+/**
+ * Comment threads in a single document that @mention `who`. A thread is
+ * "handled" once it is resolved or the peer has replied in it; handled threads
+ * are omitted unless `includeHandled`.
+ */
+function threadsMentioning(doc: Y.Doc, who: string, includeHandled: boolean): ThreadMention[] {
+  const content = doc.getText(TEXT_KEY).toString();
+  const entries: ThreadMention[] = [];
+  for (const thread of listThreads(doc)) {
+    const comments = [thread.root, ...thread.replies];
+    const request = comments.find((comment) => comment.mentions.includes(who));
+    if (!request) {
+      continue;
+    }
+    const respondedByWho = comments.some((comment) => comment.author === who);
+    if ((thread.resolved || respondedByWho) && !includeHandled) {
+      continue;
+    }
+    entries.push({
+      threadId: thread.root.id,
+      quotedText: thread.quotedText,
+      currentText: thread.range ? content.slice(thread.range.from, thread.range.to) : null,
+      resolved: thread.resolved,
+      request: { author: request.author, body: request.body, createdAt: request.createdAt },
+      respondedByWho,
+    });
+  }
+  return entries;
+}
+
+/** Count of pending (un-reviewed) suggested edits in a document. */
+function pendingSuggestions(doc: Y.Doc): number {
+  return listSuggestions(doc).filter((suggestion) => suggestion.status === 'pending').length;
 }
 
 /**
@@ -121,11 +177,7 @@ async function docForRead(
   return { doc, release: () => doc.destroy() };
 }
 
-/**
- * Scan every document in a project for comment threads that @mention `who`.
- * A thread is "handled" once it is resolved or the peer has replied in it;
- * handled threads are omitted unless `includeHandled`.
- */
+/** Scan every document in a project for comment threads that @mention `who`. */
 async function collectMentions(
   vault: Vault,
   registry: RoomRegistry,
@@ -141,32 +193,50 @@ async function collectMentions(
       continue;
     }
     try {
-      const content = doc.getText(TEXT_KEY).toString();
-      for (const thread of listThreads(doc)) {
-        const comments = [thread.root, ...thread.replies];
-        const request = comments.find((comment) => comment.mentions.includes(who));
-        if (!request) {
-          continue;
-        }
-        const respondedByWho = comments.some((comment) => comment.author === who);
-        if ((thread.resolved || respondedByWho) && !includeHandled) {
-          continue;
-        }
-        entries.push({
-          doc: rel,
-          threadId: thread.root.id,
-          quotedText: thread.quotedText,
-          currentText: thread.range ? content.slice(thread.range.from, thread.range.to) : null,
-          resolved: thread.resolved,
-          request: { author: request.author, body: request.body, createdAt: request.createdAt },
-          respondedByWho,
-        });
+      for (const mention of threadsMentioning(doc, who, includeHandled)) {
+        entries.push({ ...mention, doc: rel });
       }
     } finally {
       release();
     }
   }
   return entries.sort((a, b) => a.request.createdAt - b.request.createdAt);
+}
+
+/**
+ * The cross-project inbox: mentions of `who` and pending-suggestion tallies over
+ * every document in every project, gathered in one sweep (each doc opened once).
+ * Powers Home's inbox block and its sidebar badge.
+ */
+async function collectInbox(
+  vault: Vault,
+  registry: RoomRegistry,
+  who: string,
+  includeHandled: boolean,
+): Promise<{ mentions: InboxMention[]; suggestions: InboxSuggestions[] }> {
+  const mentions: InboxMention[] = [];
+  const suggestions: InboxSuggestions[] = [];
+  for (const project of await vault.listProjects()) {
+    for (const rel of await vault.listDocs(project)) {
+      const { doc, release } = await docForRead(`${project}/${rel}`, vault, registry);
+      if (!doc) {
+        continue;
+      }
+      try {
+        for (const mention of threadsMentioning(doc, who, includeHandled)) {
+          mentions.push({ ...mention, project, doc: rel });
+        }
+        const pending = pendingSuggestions(doc);
+        if (pending > 0) {
+          suggestions.push({ project, doc: rel, pending });
+        }
+      } finally {
+        release();
+      }
+    }
+  }
+  mentions.sort((a, b) => a.request.createdAt - b.request.createdAt);
+  return { mentions, suggestions };
 }
 
 interface SearchMatch {
@@ -299,7 +369,23 @@ export async function handleProjectsApi(
   registry: RoomRegistry,
 ): Promise<Response | null> {
   const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-  if (segments[0] !== 'api' || segments[1] !== 'projects') {
+  if (segments[0] !== 'api') {
+    return null;
+  }
+
+  // /api/mentions?who=<name>&open=<bool> — cross-project inbox: open threads that
+  // @mention a peer plus per-doc pending-suggestion counts, over all projects.
+  if (segments[1] === 'mentions' && segments.length === 2) {
+    if (req.method !== 'GET') {
+      return methodNotAllowed();
+    }
+    const who = requireString(url.searchParams.get('who'), 'who');
+    const includeHandled = url.searchParams.get('open') === 'false';
+    const { mentions, suggestions } = await collectInbox(vault, registry, who, includeHandled);
+    return Response.json({ who, mentions, suggestions });
+  }
+
+  if (segments[1] !== 'projects') {
     return null;
   }
 
@@ -352,6 +438,37 @@ export async function handleProjectsApi(
     return Response.json({ project, who, mentions });
   }
 
+  // /api/projects/:p/peers — peers currently connected to this project's *open*
+  // rooms. Read-only: it enumerates already-open rooms (never opens or hydrates
+  // one), so an unknown or idle project simply reports no peers.
+  if (segments[3] === 'peers' && segments.length === 4) {
+    if (req.method !== 'GET') {
+      return methodNotAllowed();
+    }
+    const prefix = `${project}/`;
+    const byName = new Map<string, { name: string; role: string; color: string | null; doc: string; status: string | null }>();
+    for (const [name, room] of registry.openRooms()) {
+      if (!name.startsWith(prefix)) {
+        continue;
+      }
+      const rel = name.slice(prefix.length);
+      for (const state of room.awareness.getStates().values()) {
+        const peer = (state as { user?: { name?: string; role?: string; color?: string; status?: string } }).user;
+        if (!peer?.name || byName.has(peer.name)) {
+          continue;
+        }
+        byName.set(peer.name, {
+          name: peer.name,
+          role: peer.role === 'agent' ? 'agent' : 'human',
+          color: peer.color ?? null,
+          doc: rel,
+          status: peer.status ?? null,
+        });
+      }
+    }
+    return Response.json({ project, peers: [...byName.values()] });
+  }
+
   // /api/projects/:p/search?q=<text>&limit=<n> — full text across the project.
   if (segments[3] === 'search' && segments.length === 4) {
     if (req.method !== 'GET') {
@@ -400,7 +517,7 @@ export async function handleProjectsApi(
   if (segments.length === 4) {
     switch (req.method) {
       case 'GET':
-        return Response.json({ docs: await vault.listDocs(project) });
+        return Response.json({ docs: await vault.listDocsMeta(project) });
       case 'POST': {
         const path = requireRelPath((await body(req)).path, 'path');
         await vault.createDoc(`${project}/${path}`);

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
-import { appendFile, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 
 const EDITABLE_EXTENSIONS = ['.md', '.markdown', '.txt'];
@@ -12,8 +12,43 @@ const LEGACY_STATE_DIR = '.sharemd';
 /** Project pre-projects vaults' root documents migrate into. */
 export const DEFAULT_PROJECT = 'main';
 
-/** Route names the web server claims — a project cannot shadow them. */
-const RESERVED_PROJECT_NAMES = new Set(['api', 'ws', 'app.js', 'styles.css', 'install.sh', 'install.ps1']);
+/**
+ * Route names the web server claims — a project cannot shadow them. `settings`
+ * and `agents` are claimed by client routes (/settings, /<project>/agents); a
+ * document *folder* named `agents` stays legal, only the top-level name is taken.
+ */
+const RESERVED_PROJECT_NAMES = new Set([
+  'api',
+  'ws',
+  'app.js',
+  'styles.css',
+  'install.sh',
+  'install.ps1',
+  'settings',
+  'agents',
+]);
+
+/** A document with the metadata a list view needs (title, mtime). */
+export interface DocMeta {
+  /** Project-relative path. */
+  path: string;
+  /** First markdown heading in the file, or null (client falls back to filename). */
+  title: string | null;
+  /** File mtime in milliseconds. */
+  modified: number;
+}
+
+/** First `#`..`######` heading within the first 50 lines, or null. */
+function firstHeading(text: string): string | null {
+  const lines = text.split('\n', 50);
+  for (const line of lines) {
+    const match = /^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(line);
+    if (match) {
+      return match[1]!.trim();
+    }
+  }
+  return null;
+}
 
 /** A named version of a document: full CRDT state (base64) plus display metadata. */
 export interface StoredSnapshot {
@@ -269,6 +304,18 @@ export class Vault {
       docs.push(absolute.slice(dir.length + 1).split(sep).join('/'));
     }
     return docs.sort();
+  }
+
+  /** Documents of one project with list metadata (title from first heading, mtime). */
+  async listDocsMeta(project: string): Promise<DocMeta[]> {
+    const paths = await this.listDocs(project);
+    return Promise.all(
+      paths.map(async (rel) => {
+        const absolute = this.resolvePath(`${project}/${rel}`);
+        const [text, stats] = await Promise.all([Bun.file(absolute).text(), stat(absolute)]);
+        return { path: rel, title: firstHeading(text), modified: stats.mtimeMs };
+      }),
+    );
   }
 
   /** Create an empty document; parent folders inside the project are created as needed. */

@@ -41,10 +41,17 @@ describe('mdio server', () => {
     }
   });
 
-  test('lists a project’s documents over HTTP, project-relative', async () => {
+  test('lists a project’s documents over HTTP, project-relative with metadata', async () => {
     const response = await fetch(`${server.url}/api/projects/main/docs`);
-    const { docs } = (await response.json()) as { docs: string[] };
-    expect(docs).toEqual(['demo.md', 'other.md']);
+    const { docs } = (await response.json()) as {
+      docs: Array<{ path: string; title: string | null; modified: number }>;
+    };
+    expect(docs.map((doc) => doc.path)).toEqual(['demo.md', 'other.md']);
+    // demo.md opens with a heading; the title is derived from it.
+    const demo = docs.find((doc) => doc.path === 'demo.md')!;
+    expect(demo.title).toBe('Demo document');
+    expect(demo.modified).toBeGreaterThan(0);
+    expect(docs.find((doc) => doc.path === 'other.md')!.title).toBe('Other');
   });
 
   test('rejects traversal and non-markdown paths', async () => {
@@ -95,8 +102,10 @@ describe('mdio server', () => {
     const { startServer } = await import('../src/server/index');
     const fresh = await startServer({ vaultDir: dir, port: 0 });
     try {
-      const { docs } = (await (await fetch(`${fresh.url}/api/projects/main/docs`)).json()) as { docs: string[] };
-      expect(docs).toEqual(['welcome.md']);
+      const { docs } = (await (await fetch(`${fresh.url}/api/projects/main/docs`)).json()) as {
+        docs: Array<{ path: string }>;
+      };
+      expect(docs.map((doc) => doc.path)).toEqual(['welcome.md']);
       expect(await Bun.file(join(dir, 'main', 'welcome.md')).text()).toBe('# Welcome\n');
       expect(await Bun.file(join(dir, '.mdio', 'main', 'welcome.md.log')).exists()).toBe(true);
     } finally {

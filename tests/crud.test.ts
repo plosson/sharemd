@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { apiCreateDoc, apiCreateProject, connectPeer, startTestServer, waitFor, type TestPeer } from './helpers';
 import { registerAuthor } from '../src/shared/blame';
+import { addComment } from '../src/shared/comments';
+import { addSuggestion } from '../src/shared/suggestions';
 import { STATE_DIR } from '../src/server/vault';
 import type { MdioServer } from '../src/server/index';
 
@@ -47,7 +49,10 @@ async function projectList(): Promise<string[]> {
 }
 
 async function docList(project: string): Promise<string[]> {
-  return (((await (await call('GET', `/api/projects/${project}/docs`)).json()) as { docs: string[] }).docs);
+  const { docs } = (await (await call('GET', `/api/projects/${project}/docs`)).json()) as {
+    docs: Array<{ path: string }>;
+  };
+  return docs.map((doc) => doc.path);
 }
 
 describe('project CRUD', () => {
@@ -450,5 +455,110 @@ describe('project mcp config', () => {
     expect((await call('GET', '/api/projects/wired/mcp-config?username=a/b/c')).status).toBe(400);
     expect((await call('GET', '/api/projects/wired/mcp-config?username=has%20space')).status).toBe(400);
     expect((await call('POST', '/api/projects/wired/mcp-config', {})).status).toBe(405);
+  });
+});
+
+interface InboxResponse {
+  who: string;
+  mentions: Array<{
+    project: string;
+    doc: string;
+    threadId: string;
+    resolved: boolean;
+    respondedByWho: boolean;
+    request: { author: string; body: string };
+  }>;
+  suggestions: Array<{ project: string; doc: string; pending: number }>;
+}
+
+describe('cross-project inbox (GET /api/mentions)', () => {
+  test('aggregates open mentions and pending suggestions across every project', async () => {
+    await apiCreateDoc(server, 'inbox-a/notes.md');
+    await apiCreateDoc(server, 'inbox-b/plan.md');
+
+    // A peer seeds text, a comment mentioning grace, and a pending suggestion.
+    const a = await peer('inbox-a/notes.md');
+    registerAuthor(a.doc, { name: 'dana', color: '#111', role: 'human' });
+    a.text.insert(0, 'the quick brown fox');
+    addComment(a.doc, { author: 'dana', body: 'please review @grace', from: 4, to: 9 });
+
+    const b = await peer('inbox-b/plan.md');
+    registerAuthor(b.doc, { name: 'dana', color: '#111', role: 'human' });
+    b.text.insert(0, 'a plan worth reviewing');
+    addSuggestion(b.doc, { author: 'plosson/claude', kind: 'replace', from: 2, to: 6, text: 'draft' });
+    await server.registry.flushAll();
+
+    const inbox = (await (await call('GET', '/api/mentions?who=grace')).json()) as InboxResponse;
+    expect(inbox.who).toBe('grace');
+    const graceMention = inbox.mentions.find((m) => m.doc === 'notes.md' && m.project === 'inbox-a');
+    expect(graceMention).toBeDefined();
+    expect(graceMention!.request.body).toInclude('@grace');
+    // The pending suggestion in a different project surfaces in the same response.
+    const suggestion = inbox.suggestions.find((s) => s.project === 'inbox-b' && s.doc === 'plan.md');
+    expect(suggestion).toBeDefined();
+    expect(suggestion!.pending).toBe(1);
+  });
+
+  test('handled threads drop out unless open=false; missing who is 400; wrong method 405', async () => {
+    await apiCreateDoc(server, 'inbox-c/doc.md');
+    const c = await peer('inbox-c/doc.md');
+    registerAuthor(c.doc, { name: 'heidi', color: '#222', role: 'human' });
+    c.text.insert(0, 'hello world content');
+    // heidi mentions herself and then replies — the thread is "handled".
+    addComment(c.doc, { author: 'ivan', body: 'ping @heidi', from: 0, to: 5 });
+    await server.registry.flushAll();
+
+    const open = (await (await call('GET', '/api/mentions?who=heidi')).json()) as InboxResponse;
+    expect(open.mentions.some((m) => m.doc === 'doc.md')).toBe(true);
+
+    // Resolve it → gone from the default (open-only) view, back with open=false.
+    const room = await server.registry.open('inbox-c/doc.md');
+    const threadId = open.mentions.find((m) => m.doc === 'doc.md')!.threadId;
+    const { setResolved } = await import('../src/shared/comments');
+    setResolved(room.doc, threadId, true);
+    await server.registry.flushAll();
+
+    const stillOpen = (await (await call('GET', '/api/mentions?who=heidi')).json()) as InboxResponse;
+    expect(stillOpen.mentions.some((m) => m.doc === 'doc.md')).toBe(false);
+    const withHandled = (await (await call('GET', '/api/mentions?who=heidi&open=false')).json()) as InboxResponse;
+    expect(withHandled.mentions.some((m) => m.doc === 'doc.md')).toBe(true);
+
+    expect((await call('GET', '/api/mentions')).status).toBe(400);
+    expect((await call('POST', '/api/mentions', {})).status).toBe(405);
+  });
+});
+
+describe('connected peers (GET /api/projects/:p/peers)', () => {
+  test('lists peers in open rooms, deduped by name; empty and unknown projects report none', async () => {
+    // Unknown project: no rooms, no peers, still 200.
+    const unknown = (await (await call('GET', '/api/projects/no-such-project/peers')).json()) as {
+      project: string;
+      peers: unknown[];
+    };
+    expect(unknown.peers).toEqual([]);
+
+    await apiCreateDoc(server, 'peers-proj/live.md');
+    // A project with a document but no open room reports no peers.
+    const idle = (await (await call('GET', '/api/projects/peers-proj/peers')).json()) as { peers: unknown[] };
+    expect(idle.peers).toEqual([]);
+
+    // A connected peer that announces awareness shows up.
+    const live = await peer('peers-proj/live.md');
+    live.provider.awareness.setLocalStateField('user', {
+      name: 'plosson/scout',
+      role: 'agent',
+      color: '#6a53d0',
+      status: 'composing',
+    });
+    const peersNow = async () =>
+      ((await (await call('GET', '/api/projects/peers-proj/peers')).json()) as {
+        peers: Array<{ name: string; role: string; doc: string; status: string | null }>;
+      }).peers;
+    for (let attempt = 0; attempt < 50 && (await peersNow()).length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const peers = await peersNow();
+    expect(peers).toHaveLength(1);
+    expect(peers[0]).toMatchObject({ name: 'plosson/scout', role: 'agent', doc: 'live.md', status: 'composing' });
   });
 });

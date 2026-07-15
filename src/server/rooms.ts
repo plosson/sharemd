@@ -349,6 +349,8 @@ export class Room {
 
 export class RoomRegistry {
   private readonly rooms = new Map<string, Promise<Room>>();
+  /** Settled rooms only — lets read-only callers enumerate without awaiting hydration. */
+  private readonly settled = new Map<string, Room>();
 
   constructor(
     private readonly vault: Vault,
@@ -372,10 +374,22 @@ export class RoomRegistry {
         }
         return Room.open(name, this.vault, this.persistDebounceMs);
       })();
-      room.catch(() => this.rooms.delete(name));
+      room.then(
+        (settled) => {
+          if (this.rooms.get(name) === room) {
+            this.settled.set(name, settled);
+          }
+        },
+        () => this.rooms.delete(name),
+      );
       this.rooms.set(name, room);
     }
     return room;
+  }
+
+  /** Settled open rooms as [name, room] — never opens or awaits a hydrating one. */
+  openRooms(): Array<[string, Room]> {
+    return [...this.settled.entries()];
   }
 
   /** Close and forget a room (no-op if it isn't open). See Room.close for `flush`. */
@@ -385,6 +399,7 @@ export class RoomRegistry {
       return;
     }
     this.rooms.delete(name);
+    this.settled.delete(name);
     const room = await pending.catch(() => null);
     await room?.close(opts);
   }
