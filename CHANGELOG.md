@@ -7,6 +7,40 @@ headers start with the first tagged release.
 
 ## Unreleased
 
+### Changed
+- **UX rework, phase 1 — hierarchy & trust in the document view.** The
+  single document surface got real hierarchy and a coat of paint, all
+  client-side (no new routes or server APIs). Design tokens (CSS custom
+  properties for ink/paper/accent/human/danger) now back every color.
+  - **Header** replaces the row of seven identical pills with three zones:
+    a breadcrumb `<project> / <title>` (title derived live from the doc's
+    first heading, raw path in the tooltip) with a demoted connection status
+    *dot*; an overlapping presence avatar stack (round for humans, squared in
+    the accent color for agents, name in the tooltip); an `Edit | Both | Read`
+    segmented mode toggle; and a `⋯` menu holding comment / history / versions
+    / rename / move / delete (delete is red, behind the menu).
+  - **View mode** — the URL hash now carries `mode=edit|both|read` (replacing
+    the boolean `preview=1`; no back-compat). Read mode renders the preview
+    full-width with the editor hidden.
+  - **Prose ergonomics** — editor and preview cap at a 72ch centered column,
+    render prose in a proportional font (fenced code stays monospaced),
+    dim markdown syntax marks and enlarge headings via a CodeMirror
+    `HighlightStyle`, and drop the line-number gutter.
+  - **In-app dialogs & toasts** — a new `dialogs.ts` (`askText`, `askChoice`,
+    `askConfirm`, `toast`) replaces every native `prompt`/`confirm`/`alert`
+    in the client. Move-doc is now a project picker; errors surface as toasts,
+    successes as brief confirmations.
+  - **Project bar** — labeled `＋ new` button plus a `⋯` project menu
+    (rename, connect an agent, delete); the MCP dialog's clipped command line
+    now wraps.
+  - **Empty states & login** — centered CTAs for an empty project (create a
+    document / connect an agent) and an empty vault (create your first
+    project); the login modal gained the wordmark and product context and
+    renders over the app background instead of a ghosted editor.
+  - **Trust fixes** — the project list refetches on window focus and after
+    mutations; the versions dialog toasts on restore and disables save while
+    a save is in flight.
+
 ### Added
 - **Per-project MCP config** — `GET /api/projects/:p/mcp-config?username=`
   returns everything needed to wire an agent into a project (binary install
