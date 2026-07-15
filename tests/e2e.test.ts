@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { apiCreateDoc, connectPeer, startTestServer, waitFor } from './helpers';
+import { apiCreateDoc, connectPeer, startTestServer } from './helpers';
 import type { MdioServer } from '../src/server/index';
 import { AgentClient } from './mcp-client';
 
@@ -36,6 +36,34 @@ function waitForText(selector: string, text: string, timeoutMs = 10_000) {
   );
 }
 
+/** The document identity now lives in the URL path, not a header label. */
+function waitForPath(path: string) {
+  return page.waitForFunction((needle) => location.pathname === needle, `/${path}`);
+}
+
+/** A peer is present when an avatar carries its name in the title tooltip. */
+function waitForPresence(name: string) {
+  return page.waitForFunction(
+    (needle) =>
+      [...document.querySelectorAll('#presence .avatar')].some(
+        (el) => el.getAttribute('title') === needle,
+      ),
+    name,
+  );
+}
+
+/** Open the document ⋯ menu and click one of its items (comment/history/rename/…). */
+async function docMenu(itemId: string) {
+  await page.click('#doc-menu-toggle');
+  await page.click(`#${itemId}`);
+}
+
+/** Open the project ⋯ menu and click one of its items (rename/connect/delete). */
+async function projectMenu(itemId: string) {
+  await page.click('#project-menu-toggle');
+  await page.click(`#${itemId}`);
+}
+
 test(
   'two MCP agents and a human edit the same document concurrently without losing anything',
   async () => {
@@ -47,9 +75,9 @@ test(
     await alice.call('open_document', { path: 'demo.md' });
     await bob.call('open_document', { path: 'demo.md' });
 
-    // Human sees both agents in the presence bar, marked as agents of their owner.
-    await waitForText('#presence', '🤖 plosson/alice');
-    await waitForText('#presence', '🤖 plosson/bob');
+    // Human sees both agents in the presence stack, marked as agents of their owner.
+    await waitForPresence('plosson/alice');
+    await waitForPresence('plosson/bob');
 
     // All three edit at the same time.
     const humanEdits = (async () => {
@@ -126,7 +154,7 @@ test(
         color: '#8a4bbf',
         colorLight: '#8a4bbf33',
       });
-      await waitForText('#presence', 'Carol'); // awareness propagated to the browser
+      await waitForPresence('Carol'); // awareness propagated to the browser
       carol.text.insert(carol.text.length, '\nCAROL: watch this line appear highlighted\n');
 
       // Badge with the author's name shows up on the inserted range…
@@ -165,7 +193,7 @@ test(
 test(
   'history mode replays the edit log: scrub back to the seed, play forward again',
   async () => {
-    await page.click('#history-open');
+    await docMenu('history-open');
     await page.waitForSelector('#history:not([hidden])');
     expect(await page.textContent('#history-title')).toBe('main/demo.md — history');
 
@@ -207,7 +235,7 @@ test(
       const at = view.state.doc.toString().indexOf('First note');
       view.dispatch({ selection: { anchor: at, head: at + 'First note'.length } });
     });
-    await page.click('#comment-add');
+    await docMenu('comment-add');
     await page.fill(
       '#comments-list textarea[data-draft="new-comment"]',
       'HUMAN: is this note still valid, @plosson/alice?',
@@ -265,7 +293,7 @@ test(
 
     // Empty selection: the add button nudges instead of opening a composer.
     await selectInEditor('ALICE: second paragraph', true);
-    await page.click('#comment-add');
+    await docMenu('comment-add');
     await page.waitForFunction(() =>
       document.querySelector('#comment-add')?.classList.contains('nudge'),
     );
@@ -273,7 +301,7 @@ test(
 
     // Mention autocomplete: type "@plo", pick the second candidate with the keyboard.
     await selectInEditor('second paragraph');
-    await page.click('#comment-add');
+    await docMenu('comment-add');
     await page.fill('textarea[data-draft="new-comment"]', 'needs polish @plo');
     await page.waitForSelector('.mention-dropdown:not([hidden]) .mention-option');
     const options = await page.locator('.mention-option').allTextContents();
@@ -335,7 +363,7 @@ test(
 test(
   'markdown preview renders live, including mermaid diagrams (and survives invalid ones)',
   async () => {
-    await page.click('#preview-toggle');
+    await page.click('#mode-both');
     await page.waitForSelector('#preview:not([hidden])');
     await page.waitForFunction(() =>
       document.querySelector('#preview h1')?.textContent?.includes('Demo document'),
@@ -365,7 +393,7 @@ test(
     expect(await page.locator('#preview pre.mermaid svg').count()).toBeGreaterThanOrEqual(1);
 
     // Leave the pane off so later tests see the default layout.
-    await page.click('#preview-toggle');
+    await page.click('#mode-edit');
     await page.waitForSelector('#preview', { state: 'hidden' });
   },
   45_000,
@@ -376,12 +404,11 @@ test(
   async () => {
     // Switching documents pushes a history entry with the doc as the path.
     await page.click('li[data-path="main/other.md"]');
-    await waitForText('#doc-title', 'main/other.md');
-    await page.waitForFunction(() => location.pathname === '/main/other.md');
+    await waitForPath('main/other.md');
 
-    // View state (preview) is reflected in the hash without new history entries.
-    await page.click('#preview-toggle');
-    await page.waitForFunction(() => location.hash.includes('preview=1'));
+    // View state (mode) is reflected in the hash without new history entries.
+    await page.click('#mode-both');
+    await page.waitForFunction(() => location.hash.includes('mode=both'));
 
     // Creating a comment focuses it and deep-links it in the hash.
     await page.evaluate(() => {
@@ -390,7 +417,7 @@ test(
       const at = view.state.doc.toString().indexOf('Other');
       view.dispatch({ selection: { anchor: at, head: at + 'Other'.length } });
     });
-    await page.click('#comment-add');
+    await docMenu('comment-add');
     await page.fill('textarea[data-draft="new-comment"]', 'deep-linkable thread');
     await page.click('#comments-list .comment-btn.primary');
     await page.waitForFunction(() => location.hash.includes('comment=c-'));
@@ -398,15 +425,14 @@ test(
     // Reload: same document, preview open, same thread focused.
     await page.reload();
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'main/other.md');
+    await waitForPath('main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
     await page.waitForSelector('.comment-card.focused');
     expect(await page.textContent('.comment-card.focused')).toInclude('deep-linkable thread');
 
     // Back returns to the previous document (and its view state: preview off).
     await page.goBack();
-    await waitForText('#doc-title', 'main/demo.md');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    await waitForPath('main/demo.md');
     await page.waitForSelector('#preview', { state: 'hidden' });
   },
   30_000,
@@ -434,21 +460,20 @@ test(
     await page.waitForSelector('.comment-card.focused');
 
     // A direct path URL loads that document with its view state applied.
-    await page.goto(`${server.url}/main/other.md#preview=1`);
+    await page.goto(`${server.url}/main/other.md#mode=both`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'main/other.md');
+    await waitForPath('main/other.md');
     await page.waitForSelector('#preview:not([hidden])');
 
     // An unknown document falls back to the first doc and normalizes the path.
     await page.goto(`${server.url}/does-not-exist.md`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'main/demo.md');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    await waitForPath('main/demo.md');
 
     // A stale comment id is ignored: page loads, nothing focused, no errors.
     await page.goto(`${server.url}/main/demo.md#comment=c-deleted-long-ago`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'main/demo.md');
+    await waitForPath('main/demo.md');
     expect(await page.locator('.comment-card.focused').count()).toBe(0);
   },
   30_000,
@@ -503,7 +528,7 @@ test(
 
     await page.goto(`${server.url}/specs/plan.md`);
     await page.waitForSelector('.cm-content');
-    await waitForText('#doc-title', 'specs/plan.md');
+    await waitForPath('specs/plan.md');
 
     // Sidebar is scoped: this project's docs (sans prefix), none of main's.
     const selected = () =>
@@ -514,13 +539,11 @@ test(
 
     // Switching projects opens that project's first document.
     await page.selectOption('#project-select', 'main');
-    await waitForText('#doc-title', 'main/demo.md');
-    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    await waitForPath('main/demo.md');
 
     // Back crosses the project boundary and the switcher follows.
     await page.goBack();
-    await waitForText('#doc-title', 'specs/plan.md');
-    await page.waitForFunction(() => location.pathname === '/specs/plan.md');
+    await waitForPath('specs/plan.md');
     expect(await selected()).toBe('specs');
   },
   30_000,
@@ -529,97 +552,87 @@ test(
 test(
   'humans CRUD projects and documents from the UI, with cancels and errors handled',
   async () => {
-    type DialogHandler = (dialog: import('playwright').Dialog) => Promise<void>;
-    const queue: DialogHandler[] = [];
-    const alerts: string[] = [];
-    const onDialog = async (dialog: import('playwright').Dialog) => {
-      if (dialog.type() === 'alert') {
-        alerts.push(dialog.message());
-        await dialog.dismiss();
-        return;
-      }
-      const handler = queue.shift();
-      await (handler ? handler(dialog) : dialog.dismiss());
-    };
-    page.on('dialog', onDialog);
     const selected = () =>
       page.evaluate(() => (document.querySelector('#project-select') as HTMLSelectElement).value);
-    try {
-      // Starting point: the specs project from the previous test.
-      await page.goto(`${server.url}/specs/plan.md`);
-      await page.waitForSelector('.cm-content');
+    // Fill the in-app text dialog and confirm it.
+    const dialogSubmit = async (value: string) => {
+      await page.waitForSelector('#dialog:not([hidden]) #dialog-input:not([hidden])');
+      await page.fill('#dialog-input', value);
+      await page.click('#dialog-confirm');
+      await page.waitForSelector('#dialog', { state: 'hidden' });
+    };
 
-      // Cancelling the prompt changes nothing.
-      queue.push((dialog) => dialog.dismiss());
-      await page.click('#project-new');
-      expect(await selected()).toBe('specs');
-      expect(await page.evaluate(() => location.pathname)).toBe('/specs/plan.md');
+    // Starting point: the specs project from the previous test.
+    await page.goto(`${server.url}/specs/plan.md`);
+    await page.waitForSelector('.cm-content');
 
-      // A reserved project name is rejected and surfaced as an alert.
-      queue.push((dialog) => dialog.accept('api'));
-      await page.click('#project-new');
-      await waitFor(() => alerts.some((message) => message.includes('reserved')), {
-        label: 'reserved-name error alert',
-      });
-      expect(await selected()).toBe('specs');
+    // Cancelling the dialog changes nothing.
+    await page.click('#project-new');
+    await page.waitForSelector('#dialog:not([hidden])');
+    await page.click('#dialog-cancel');
+    await page.waitForSelector('#dialog', { state: 'hidden' });
+    expect(await selected()).toBe('specs');
+    expect(await page.evaluate(() => location.pathname)).toBe('/specs/plan.md');
 
-      // Create a project: URL becomes its page, sidebar is empty.
-      queue.push((dialog) => dialog.accept('research'));
-      await page.click('#project-new');
-      await page.waitForFunction(() => location.pathname === '/research');
-      expect(await selected()).toBe('research');
-      expect(await page.locator('#doc-list li').count()).toBe(0);
+    // A reserved project name is rejected and surfaced as an error toast.
+    await page.click('#project-new');
+    await dialogSubmit('api');
+    await page.waitForSelector('.toast-error');
+    expect(await page.textContent('.toast-error')).toContain('reserved');
+    expect(await selected()).toBe('specs');
 
-      // Create a document — the .md extension is implied.
-      queue.push((dialog) => dialog.accept('ideas'));
-      await page.click('#doc-new');
-      await page.waitForFunction(() => location.pathname === '/research/ideas.md');
-      await waitForText('#doc-title', 'research/ideas.md');
-      await page.locator('.cm-content').click();
-      await page.keyboard.type('# Ideas from the UI');
-      await waitForText('.cm-content', '# Ideas from the UI');
+    // Create a project: URL becomes its page, sidebar is empty with an empty state.
+    await page.click('#project-new');
+    await dialogSubmit('research');
+    await page.waitForFunction(() => location.pathname === '/research');
+    expect(await selected()).toBe('research');
+    expect(await page.locator('#doc-list li').count()).toBe(0);
+    await page.waitForSelector('#empty-state:not([hidden])');
 
-      // Rename it: URL updates, content survives.
-      queue.push((dialog) => dialog.accept('brainstorm.md'));
-      await page.click('#doc-rename');
-      await page.waitForFunction(() => location.pathname === '/research/brainstorm.md');
-      await waitForText('#doc-title', 'research/brainstorm.md');
-      await waitForText('.cm-content', '# Ideas from the UI');
+    // Create a document — the .md extension is implied.
+    await page.click('#doc-new');
+    await dialogSubmit('ideas');
+    await page.waitForFunction(() => location.pathname === '/research/ideas.md');
+    await page.locator('.cm-content').click();
+    await page.keyboard.type('# Ideas from the UI');
+    await waitForText('.cm-content', '# Ideas from the UI');
 
-      // Move it to another project: everything follows.
-      queue.push((dialog) => dialog.accept('main'));
-      await page.click('#doc-move');
-      await page.waitForFunction(() => location.pathname === '/main/brainstorm.md');
-      await waitForText('#doc-title', 'main/brainstorm.md');
-      await waitForText('.cm-content', '# Ideas from the UI');
-      expect(await selected()).toBe('main');
+    // Rename it (from the ⋯ menu): URL updates, content survives.
+    await docMenu('doc-rename');
+    await dialogSubmit('brainstorm.md');
+    await page.waitForFunction(() => location.pathname === '/research/brainstorm.md');
+    await waitForText('.cm-content', '# Ideas from the UI');
 
-      // Delete it: the UI falls back to the project's first document.
-      queue.push((dialog) => dialog.accept());
-      await page.click('#doc-delete');
-      await page.waitForFunction(() => location.pathname === '/main/demo.md');
-      expect(await page.locator('li[data-path="main/brainstorm.md"]').count()).toBe(0);
+    // Move it to another project via the picker dialog.
+    await docMenu('doc-move');
+    await page.click('.dialog-choice[data-value="main"]');
+    await page.waitForFunction(() => location.pathname === '/main/brainstorm.md');
+    await waitForText('.cm-content', '# Ideas from the UI');
+    expect(await selected()).toBe('main');
 
-      // Rename the (now empty) research project.
-      await page.selectOption('#project-select', 'research');
-      await page.waitForFunction(() => location.pathname === '/research');
-      queue.push((dialog) => dialog.accept('lab'));
-      await page.click('#project-rename');
-      await page.waitForFunction(() => location.pathname === '/lab');
-      expect(await selected()).toBe('lab');
+    // Delete it: the UI falls back to the project's first document.
+    await docMenu('doc-delete');
+    await page.click('#dialog-confirm');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    expect(await page.locator('li[data-path="main/brainstorm.md"]').count()).toBe(0);
 
-      // Delete it: back to the first remaining project, dropdown updated.
-      queue.push((dialog) => dialog.accept());
-      await page.click('#project-delete');
-      await page.waitForFunction(() => location.pathname === '/main/demo.md');
-      const options = await page.evaluate(() =>
-        [...document.querySelectorAll('#project-select option')].map((option) => option.textContent),
-      );
-      expect(options).not.toContain('lab');
-      expect(options).not.toContain('research');
-    } finally {
-      page.off('dialog', onDialog);
-    }
+    // Rename the (now empty) research project from the project ⋯ menu.
+    await page.selectOption('#project-select', 'research');
+    await page.waitForFunction(() => location.pathname === '/research');
+    await projectMenu('project-rename');
+    await dialogSubmit('lab');
+    await page.waitForFunction(() => location.pathname === '/lab');
+    expect(await selected()).toBe('lab');
+
+    // Delete it: back to the first remaining project, dropdown updated.
+    await projectMenu('project-delete');
+    await page.click('#dialog-confirm');
+    await page.waitForFunction(() => location.pathname === '/main/demo.md');
+    const options = await page.evaluate(() =>
+      [...document.querySelectorAll('#project-select option')].map((option) => option.textContent),
+    );
+    expect(options).not.toContain('lab');
+    expect(options).not.toContain('research');
   },
   60_000,
 );
@@ -638,7 +651,7 @@ test(
     await page.keyboard.type('\nVERSIONS_MARKER_ONE\n', { delay: 10 });
     await waitForText('.cm-content', 'VERSIONS_MARKER_ONE');
 
-    await page.click('#versions-open');
+    await docMenu('versions-open');
     await page.waitForSelector('#versions:not([hidden])');
     expect(await page.textContent('#versions-title')).toBe('main/demo.md — versions');
     await page.fill('#versions-label', 'checkpoint one');
@@ -656,10 +669,11 @@ test(
     await waitForText('.cm-content', 'VERSIONS_MARKER_TWO');
 
     // Restore rolls the editor back to the checkpoint: ONE returns, TWO is gone.
-    await page.click('#versions-open');
+    await docMenu('versions-open');
     await page.waitForSelector('#versions:not([hidden])');
-    page.once('dialog', (dialog) => dialog.accept());
     await page.click('.version-restore');
+    await page.waitForSelector('#dialog:not([hidden])');
+    await page.click('#dialog-confirm');
     await page.waitForFunction(() => {
       const text = document.querySelector('.cm-content')?.textContent ?? '';
       return text.includes('VERSIONS_MARKER_ONE') && !text.includes('VERSIONS_MARKER_TWO');
@@ -732,7 +746,7 @@ test(
     await page.goto(`${server.url}/main/demo.md?name=Human`);
     await page.waitForSelector('.cm-content');
 
-    await page.click('#project-mcp');
+    await projectMenu('project-mcp');
     await page.waitForSelector('#mcp-config:not([hidden]) .mcp-block pre');
     const body = (await page.textContent('#mcp-config-body'))!;
     expect(body).toInclude('install.sh'); // the binary install one-liner

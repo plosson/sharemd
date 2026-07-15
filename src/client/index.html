@@ -7,15 +7,21 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="app">
+    <div id="app" hidden>
       <aside id="sidebar">
         <h1>mdio</h1>
         <div id="project-bar">
           <select id="project-select" title="Switch project"></select>
-          <button id="project-new" type="button" title="New project">＋</button>
-          <button id="project-rename" type="button" title="Rename this project">✎</button>
-          <button id="project-delete" type="button" title="Delete this project and all its documents">🗑</button>
-          <button id="project-mcp" type="button" title="MCP config to wire an agent into this project">🤖</button>
+          <button id="project-new" type="button" title="Create a project">＋ new</button>
+          <div id="project-menu" class="menu">
+            <button id="project-menu-toggle" type="button" class="menu-toggle" title="Project actions" aria-haspopup="true" aria-expanded="false">⋯</button>
+            <ul id="project-menu-list" class="menu-list" hidden>
+              <li><button id="project-rename" type="button">Rename project</button></li>
+              <li><button id="project-mcp" type="button">Connect an agent…</button></li>
+              <li class="menu-divider"></li>
+              <li><button id="project-delete" type="button" class="danger">Delete project</button></li>
+            </ul>
+          </div>
         </div>
         <input id="doc-search" type="search" placeholder="Search this project…" autocomplete="off" />
         <ul id="doc-list"></ul>
@@ -27,17 +33,34 @@
         </div>
       </aside>
       <main id="main">
-        <header id="header">
-          <span id="doc-title">Select a document</span>
-          <span id="status" data-status="disconnected">disconnected</span>
+        <header id="header" hidden>
+          <div id="doc-identity">
+            <span id="status-dot" data-status="disconnected" title="disconnected"></span>
+            <nav id="breadcrumb" title="">
+              <span id="crumb-project"></span>
+              <span class="crumb-sep">/</span>
+              <span id="crumb-title"></span>
+            </nav>
+          </div>
           <div id="presence"></div>
-          <button id="comment-add" type="button" title="Comment on the selected text">＋ comment</button>
-          <button id="preview-toggle" type="button" title="Toggle rendered markdown preview">preview</button>
-          <button id="history-open" type="button" title="Replay this document's edit history">history</button>
-          <button id="versions-open" type="button" title="Save and restore named versions of this document">versions</button>
-          <button id="doc-rename" type="button" title="Rename this document">rename</button>
-          <button id="doc-move" type="button" title="Move this document to another project">move</button>
-          <button id="doc-delete" type="button" title="Delete this document">delete</button>
+          <div id="mode-toggle" role="group" aria-label="View mode">
+            <button id="mode-edit" type="button" class="active" title="Editor only">Edit</button>
+            <button id="mode-both" type="button" title="Editor and preview side by side">Both</button>
+            <button id="mode-read" type="button" title="Rendered preview only">Read</button>
+          </div>
+          <div id="doc-menu" class="menu">
+            <button id="doc-menu-toggle" type="button" class="menu-toggle" title="Document actions" aria-haspopup="true" aria-expanded="false">⋯</button>
+            <ul id="doc-menu-list" class="menu-list" hidden>
+              <li><button id="comment-add" type="button" title="Comment on the selected text">＋ comment</button></li>
+              <li><button id="history-open" type="button">History</button></li>
+              <li><button id="versions-open" type="button">Versions</button></li>
+              <li class="menu-divider"></li>
+              <li><button id="doc-rename" type="button">Rename</button></li>
+              <li><button id="doc-move" type="button">Move…</button></li>
+              <li class="menu-divider"></li>
+              <li><button id="doc-delete" type="button" class="danger">Delete</button></li>
+            </ul>
+          </div>
         </header>
         <div id="activity" hidden></div>
         <div id="workspace">
@@ -57,6 +80,7 @@
             <div id="suggestions-list"></div>
           </aside>
         </div>
+        <div id="empty-state" hidden></div>
       </main>
     </div>
     <div id="history" hidden>
@@ -79,7 +103,7 @@
         </header>
         <form id="versions-form">
           <input id="versions-label" type="text" placeholder="Name this version…" maxlength="100" />
-          <button type="submit">Save current version</button>
+          <button type="submit" id="versions-save">Save current version</button>
         </form>
         <div id="versions-list"></div>
       </div>
@@ -93,10 +117,26 @@
         <div id="mcp-config-body"></div>
       </div>
     </div>
+    <div id="dialog" hidden>
+      <form id="dialog-panel">
+        <h2 id="dialog-title"></h2>
+        <p id="dialog-body" hidden></p>
+        <input id="dialog-input" autocomplete="off" spellcheck="false" hidden />
+        <div id="dialog-choices" hidden></div>
+        <div id="dialog-actions">
+          <button id="dialog-cancel" type="button">Cancel</button>
+          <button id="dialog-confirm" type="submit">OK</button>
+        </div>
+      </form>
+    </div>
+    <div id="toast-tray"></div>
     <div id="login" hidden>
       <form id="login-form">
-        <h2>Who are you?</h2>
-        <p class="login-hint">This name is shown to everyone editing with you.</p>
+        <div class="login-brand">mdio</div>
+        <p class="login-tagline">
+          Live markdown for humans and AI agents.<br />
+          Your name is what collaborators see.
+        </p>
         <input
           id="login-name"
           maxlength="40"
