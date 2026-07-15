@@ -71,8 +71,7 @@
             <button id="doc-menu-toggle" type="button" class="menu-toggle" title="Document actions" aria-haspopup="true" aria-expanded="false">⋯</button>
             <ul id="doc-menu-list" class="menu-list" hidden>
               <li><button id="comment-add" type="button" title="Comment on the selected text">＋ comment</button></li>
-              <li><button id="history-open" type="button">History</button></li>
-              <li><button id="versions-open" type="button">Versions</button></li>
+              <li><button id="drawer-open" type="button">History &amp; versions</button></li>
               <li class="menu-divider"></li>
               <li><button id="doc-rename" type="button">Rename</button></li>
               <li><button id="doc-move" type="button">Move…</button></li>
@@ -109,35 +108,52 @@
         <div id="surface" hidden></div>
       </main>
     </div>
-    <div id="history" hidden>
-      <div id="history-panel">
-        <header id="history-toolbar">
-          <span id="history-title"></span>
-          <button id="history-play" type="button">▶ play</button>
-          <input id="history-slider" type="range" min="1" max="1" value="1" />
-          <span id="history-pos"></span>
-          <button id="history-close" type="button" title="Close history">✕</button>
+    <div id="drawer" hidden>
+      <div id="drawer-panel">
+        <header id="drawer-head">
+          <div id="drawer-tabs" role="tablist">
+            <button id="drawer-tab-history" type="button" class="drawer-tab" role="tab">History</button>
+            <button id="drawer-tab-versions" type="button" class="drawer-tab" role="tab">Versions</button>
+          </div>
+          <span id="drawer-title"></span>
+          <button id="drawer-close" type="button" title="Close">✕</button>
         </header>
-        <div id="history-editor"></div>
-      </div>
-    </div>
-    <div id="versions" hidden>
-      <div id="versions-panel">
-        <header id="versions-toolbar">
-          <span id="versions-title"></span>
-          <button id="versions-close" type="button" title="Close versions">✕</button>
-        </header>
-        <form id="versions-form">
-          <input id="versions-label" type="text" placeholder="Name this version…" maxlength="100" />
-          <button type="submit" id="versions-save">Save current version</button>
-        </form>
-        <div id="versions-list"></div>
+        <section id="drawer-history" class="drawer-tabpane">
+          <div id="history-toolbar">
+            <button id="history-play" type="button">▶ play</button>
+            <input id="history-slider" type="range" min="1" max="1" value="1" />
+            <span id="history-pos"></span>
+          </div>
+          <div id="history-editor"></div>
+        </section>
+        <section id="drawer-versions" class="drawer-tabpane" hidden>
+          <form id="versions-form">
+            <input id="versions-label" type="text" placeholder="Name this version…" maxlength="100" />
+            <button type="submit" id="versions-save">Save current version</button>
+          </form>
+          <div id="versions-list"></div>
+        </section>
       </div>
     </div>
     <div id="palette" hidden>
       <div id="palette-panel">
         <input id="palette-input" type="text" placeholder="Search documents, or type a command…" autocomplete="off" spellcheck="false" />
         <div id="palette-results"></div>
+      </div>
+    </div>
+    <div id="shortcuts" hidden>
+      <div id="shortcuts-panel">
+        <header id="shortcuts-head">
+          <h2>Keyboard shortcuts</h2>
+          <button id="shortcuts-close" type="button" title="Close">✕</button>
+        </header>
+        <dl id="shortcuts-list">
+          <div><dt>Command palette</dt><dd><kbd>⌘</kbd><kbd>K</kbd></dd></div>
+          <div><dt>Search</dt><dd><kbd>⌘</kbd><kbd>K</kbd></dd></div>
+          <div><dt>Cycle view mode (Edit / Both / Read)</dt><dd>⌘K → “Toggle mode”</dd></div>
+          <div><dt>Comment on the selection</dt><dd>⋯ menu → ＋ comment</dd></div>
+          <div><dt>This dialog</dt><dd><kbd>?</kbd></dd></div>
+        </dl>
       </div>
     </div>
     <div id="dialog" hidden>

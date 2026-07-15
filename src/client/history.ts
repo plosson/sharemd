@@ -23,13 +23,10 @@ interface LogEntry {
 const MIN_STEP_MS = 40;
 const MAX_STEP_MS = 800;
 
-const overlay = document.querySelector('#history')! as HTMLElement;
-const titleEl = document.querySelector('#history-title')!;
 const editorHost = document.querySelector('#history-editor')!;
 const slider = document.querySelector('#history-slider')! as HTMLInputElement;
 const posEl = document.querySelector('#history-pos')!;
 const playButton = document.querySelector('#history-play')! as HTMLButtonElement;
-const closeButton = document.querySelector('#history-close')! as HTMLButtonElement;
 
 let session: {
   entries: LogEntry[];
@@ -167,8 +164,6 @@ slider.addEventListener('input', () => {
   buildAt(session.entries, Math.max(1, Number(slider.value)));
 });
 
-closeButton.addEventListener('click', closeHistory);
-
 export function closeHistory(): void {
   if (!session) {
     return;
@@ -176,16 +171,20 @@ export function closeHistory(): void {
   stopPlayback();
   teardownEditor();
   session = null;
-  overlay.hidden = true;
 }
 
+/**
+ * Load a document's edit-log replay into the History tab of the shared drawer.
+ * The drawer owns visibility and the close affordance; this only fills the pane.
+ */
 export async function openHistory(path: string): Promise<void> {
   closeHistory();
   const entries = await fetchLog(path);
   if (entries.length === 0) {
+    posEl.textContent = 'No history yet.';
+    slider.max = '1';
+    slider.value = '1';
     return;
   }
-  titleEl.textContent = `${path} — history`;
-  overlay.hidden = false;
   buildAt(entries, entries.length);
 }

@@ -31,9 +31,15 @@ Tests are self-contained: each spawns its own server on an ephemeral port with a
   `rooms.ts` (flush-and-close or discard-and-close) so no straggling persist can
   resurrect a deleted file. `api.ts` also serves read-only surface data: docs list
   metadata (`{path, title, modified}`), the cross-project inbox (`GET /api/mentions`
-  — open @mentions + per-doc pending-suggestion counts) and connected peers
+  — open @mentions + per-doc pending-suggestion counts), connected peers
   (`GET /api/projects/:p/peers`, reads only already-open rooms via
-  `RoomRegistry.openRooms()`). The server serves the app shell for `/<project>/<doc-path>`,
+  `RoomRegistry.openRooms()`), and the per-project activity feed
+  (`GET /api/projects/:p/activity`). `activity.ts` is an **ephemeral** in-memory
+  ring buffer (per project, ~500 events, resets on restart, never persisted):
+  `Room` emits join/leave, composing↔idle, suggestion, and comment events from
+  observers wired in `Room.open` (they die with the room), and `api.ts` emits
+  version save/restore; events with no resolvable actor are dropped. The server
+  serves the app shell for `/<project>/<doc-path>`,
   bare `/<project>` pages, `/settings`, and `/<project>/agents` (view state stays in
   the URL hash).
 - `src/client/` — web UI, bundled (minified) by `Bun.build` at server startup (no build

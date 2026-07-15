@@ -168,15 +168,51 @@ const markdownProse = HighlightStyle.define([
   { tag: tags.quote, color: 'var(--ink-soft)' },
 ]);
 
-document.querySelector('#history-open')!.addEventListener('click', () => {
-  if (currentPath) {
-    void openHistory(currentPath);
+// ── History & versions drawer (two tabs sharing one overlay) ────────────────
+const drawerEl = document.querySelector('#drawer')! as HTMLElement;
+const drawerTitleEl = document.querySelector('#drawer-title')!;
+const drawerTabHistory = document.querySelector('#drawer-tab-history')! as HTMLButtonElement;
+const drawerTabVersions = document.querySelector('#drawer-tab-versions')! as HTMLButtonElement;
+const drawerPaneHistory = document.querySelector('#drawer-history')! as HTMLElement;
+const drawerPaneVersions = document.querySelector('#drawer-versions')! as HTMLElement;
+
+function showDrawerTab(tab: 'history' | 'versions'): void {
+  drawerTabHistory.classList.toggle('active', tab === 'history');
+  drawerTabVersions.classList.toggle('active', tab === 'versions');
+  drawerPaneHistory.hidden = tab !== 'history';
+  drawerPaneVersions.hidden = tab !== 'versions';
+}
+
+/** Open the shared drawer on `tab`, loading both panes for the current document. */
+function openDrawer(tab: 'history' | 'versions'): void {
+  if (!currentPath) {
+    return;
+  }
+  drawerTitleEl.textContent = currentPath;
+  drawerEl.hidden = false;
+  showDrawerTab(tab);
+  void openHistory(currentPath);
+  void openVersions(currentPath, user.name);
+}
+
+function closeDrawer(): void {
+  drawerEl.hidden = true;
+  closeHistory();
+  closeVersions();
+}
+
+document.querySelector('#drawer-open')!.addEventListener('click', () => openDrawer('history'));
+document.querySelector('#drawer-close')!.addEventListener('click', closeDrawer);
+drawerTabHistory.addEventListener('click', () => showDrawerTab('history'));
+drawerTabVersions.addEventListener('click', () => showDrawerTab('versions'));
+drawerEl.addEventListener('mousedown', (event) => {
+  if (event.target === drawerEl) {
+    closeDrawer();
   }
 });
-
-document.querySelector('#versions-open')!.addEventListener('click', () => {
-  if (currentPath) {
-    void openVersions(currentPath, user.name);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !drawerEl.hidden) {
+    closeDrawer();
   }
 });
 
@@ -189,12 +225,16 @@ function peerInitial(name: string): string {
 function renderPresence(provider: WebsocketProvider) {
   presenceEl.innerHTML = '';
   for (const state of provider.awareness.getStates().values()) {
-    const peer = (state as { user?: { name?: string; color?: string; role?: string } }).user;
+    const peer = (state as { user?: { name?: string; color?: string; role?: string; status?: string } }).user;
     if (!peer?.name) {
       continue;
     }
     const avatar = document.createElement('span');
     avatar.className = peer.role === 'agent' ? 'avatar agent' : 'avatar human';
+    // A subtle pulse marks an agent that is actively composing right now.
+    if (peer.role === 'agent' && peer.status === 'composing') {
+      avatar.classList.add('composing');
+    }
     avatar.style.background = peer.color ?? '#888';
     avatar.textContent = peerInitial(peer.name);
     avatar.title = peer.name;
@@ -236,8 +276,7 @@ function renderBreadcrumb(path: string, text: string): void {
  * hash, keep comment focus from the URL), 'none' (hashchange already has it).
  */
 function teardownEditor() {
-  closeHistory();
-  closeVersions();
+  closeDrawer();
   activityEl.hidden = true;
   currentPath = null;
   if (current) {
@@ -909,6 +948,7 @@ function wireCrud() {
   settingsButton.addEventListener('click', () => go({ kind: 'settings' }));
   document.querySelector('#nav-search')!.addEventListener('click', () => openPalette());
   document.querySelector('#logout')!.addEventListener('click', logoutNow);
+  wireShortcutsDialog();
 
   // A project created (or removed) in another tab should appear on return; the
   // inbox also refreshes on focus and on a slow interval (see startAttentionPolling).
@@ -931,6 +971,36 @@ let attentionPrimed = false;
 
 function mentionKey(mention: api.InboxMention): string {
   return `${mention.project}/${mention.doc}#${mention.threadId}`;
+}
+
+/** The `?` keyboard-shortcuts cheat sheet — opened by `?`, closed by Escape/backdrop. */
+function wireShortcutsDialog(): void {
+  const overlay = document.querySelector('#shortcuts')! as HTMLElement;
+  const close = () => {
+    overlay.hidden = true;
+  };
+  document.querySelector('#shortcuts-close')!.addEventListener('click', close);
+  overlay.addEventListener('mousedown', (event) => {
+    if (event.target === overlay) {
+      close();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !overlay.hidden) {
+      close();
+      return;
+    }
+    // `?` opens it, unless the user is typing (input/textarea/CodeMirror/dialog).
+    const target = event.target as HTMLElement;
+    const typing =
+      target.closest('input, textarea, [contenteditable="true"], .cm-editor') !== null ||
+      !document.querySelector('#dialog')!.hasAttribute('hidden') ||
+      !document.querySelector('#palette')!.hasAttribute('hidden');
+    if (event.key === '?' && !typing) {
+      event.preventDefault();
+      overlay.hidden = false;
+    }
+  });
 }
 
 /** Sidebar Inbox badge = unhandled mentions + docs with pending suggestions. */

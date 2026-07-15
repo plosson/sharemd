@@ -8,6 +8,36 @@ headers start with the first tagged release.
 ## Unreleased
 
 ### Changed
+- **UX rework, phase 3 — make the agent loop visible.** Acting on agent work,
+  seeing it, moving fast, and getting pulled back when needed.
+  - **Inline suggestion popovers** — clicking a suggestion mark (or ghost insert
+    widget) opens an anchored popover at the text with the author, kind, −old/+new
+    preview, and Accept / Reject / Withdraw, positioned via `view.coordsAtPos`
+    (scroll-into-view + measure so it works in long documents). The right rail
+    becomes explicit bulk review ("Review N suggestions") with Accept all / Reject
+    all behind a danger confirm; Accept all re-resolves ranges between applications
+    (anchor order, skipping orphans) and reports the outcome in a toast. The known
+    concurrent double-accept trade-off is documented in code.
+  - **Agent activity feed** — a per-project, **ephemeral** in-memory ring buffer
+    (`src/server/activity.ts`, ~500 events, resets on restart, never persisted)
+    exposed at `GET /api/projects/:p/activity`. Events come from signals already
+    flowing through a room — join/leave, composing↔idle (writing/finished),
+    suggestions (suggested/accepted/rejected), comments (commented/replied/resolved),
+    and version saves/restores — via observers wired in `Room.open` that die with
+    the room; events with no resolvable actor are dropped. Rendered as an Activity
+    block on the Agents page and a compact last-3 strip on Home project cards.
+  - **⌘K command palette** (`src/client/palette.ts`) — a keyboard-first overlay
+    (⌘K/Ctrl+K, or the sidebar Search item) that jumps to any document across
+    projects, full-text-searches the current project (≥3 chars, "In text"), and
+    runs actions (New document / project, Connect an agent, Settings, Toggle mode,
+    Copy MCP config). It replaces the per-project sidebar search input.
+  - **Attention** — the inbox polls on a 60s interval and on focus, keeping the
+    sidebar badge and the tab title (`(2) mdio`) in sync; a newly-arrived unhandled
+    @mention pops a clickable toast that deep-links to the thread. (Non-goals for
+    now: web push, sounds, per-thread read state.)
+  - **Polish** — History and Versions merged into one two-tab drawer (single
+    `History & versions` ⋯-menu entry); a composing agent's presence avatar pulses;
+    empty-inbox teaching copy; a `?` keyboard-shortcuts dialog.
 - **UX rework, phase 2 — Home, Inbox, Agents, and Settings surfaces.** The
   app grew from one document surface into five, behind a small plain-DOM router
   (no framework). `url-state` now resolves the path to a `view` discriminator

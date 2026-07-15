@@ -116,7 +116,16 @@ export function renderInbox(host: HTMLElement, ctx: SurfaceContext, options: Inb
 
     if (inbox.mentions.length === 0 && inbox.suggestions.length === 0) {
       list.replaceChildren(
-        el('p', { class: 'inbox-empty', text: showHandled ? 'Nothing here.' : "You're all caught up. 🎉" }),
+        showHandled
+          ? el('p', { class: 'inbox-empty', text: 'Nothing here.' })
+          : el(
+              'p',
+              { class: 'inbox-empty' },
+              el('span', { class: 'inbox-empty-lead', text: 'Nothing needs you.' }),
+              ' Mention ',
+              el('span', { class: 'comment-mention', text: '@agent' }),
+              ' in a comment to hand off work.',
+            ),
       );
       return;
     }

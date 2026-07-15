@@ -76,6 +76,14 @@ async function projectMenu(itemId: string) {
   await page.click(`#${itemId}`);
 }
 
+/** Open the shared History & versions drawer on its Versions tab. */
+async function openVersionsTab() {
+  await docMenu('drawer-open');
+  await page.waitForSelector('#drawer:not([hidden])');
+  await page.click('#drawer-tab-versions');
+  await page.waitForSelector('#drawer-versions:not([hidden])');
+}
+
 test(
   'two MCP agents and a human edit the same document concurrently without losing anything',
   async () => {
@@ -205,9 +213,12 @@ test(
 test(
   'history mode replays the edit log: scrub back to the seed, play forward again',
   async () => {
-    await docMenu('history-open');
-    await page.waitForSelector('#history:not([hidden])');
-    expect(await page.textContent('#history-title')).toBe('main/demo.md — history');
+    // The drawer opens on the History tab; its title is the document path.
+    await docMenu('drawer-open');
+    await page.waitForSelector('#drawer:not([hidden])');
+    await page.waitForSelector('#drawer-tab-history.active');
+    await page.waitForSelector('#drawer-history:not([hidden])');
+    expect(await page.textContent('#drawer-title')).toBe('main/demo.md');
 
     // Opens at the latest entry: everything everyone wrote is there.
     await waitForText('#history-editor .cm-content', 'BOB: appended a closing line.');
@@ -231,8 +242,8 @@ test(
       { timeout: 10_000 },
     );
     await page.click('#history-play'); // pause
-    await page.click('#history-close');
-    await page.waitForSelector('#history', { state: 'hidden' });
+    await page.click('#drawer-close');
+    await page.waitForSelector('#drawer', { state: 'hidden' });
   },
   30_000,
 );
@@ -665,16 +676,15 @@ test(
     await page.keyboard.type('\nVERSIONS_MARKER_ONE\n', { delay: 10 });
     await waitForText('.cm-content', 'VERSIONS_MARKER_ONE');
 
-    await docMenu('versions-open');
-    await page.waitForSelector('#versions:not([hidden])');
-    expect(await page.textContent('#versions-title')).toBe('main/demo.md — versions');
+    await openVersionsTab();
+    expect(await page.textContent('#drawer-title')).toBe('main/demo.md');
     await page.fill('#versions-label', 'checkpoint one');
     await page.click('#versions-form button[type="submit"]');
     await page.waitForFunction(() =>
       [...document.querySelectorAll('.version-label')].some((el) => el.textContent === 'checkpoint one'),
     );
-    await page.click('#versions-close');
-    await page.waitForSelector('#versions', { state: 'hidden' });
+    await page.click('#drawer-close');
+    await page.waitForSelector('#drawer', { state: 'hidden' });
 
     // Diverge from the checkpoint.
     await page.locator('.cm-content').click();
@@ -683,8 +693,7 @@ test(
     await waitForText('.cm-content', 'VERSIONS_MARKER_TWO');
 
     // Restore rolls the editor back to the checkpoint: ONE returns, TWO is gone.
-    await docMenu('versions-open');
-    await page.waitForSelector('#versions:not([hidden])');
+    await openVersionsTab();
     await page.click('.version-restore');
     await page.waitForSelector('#dialog:not([hidden])');
     await page.click('#dialog-confirm');

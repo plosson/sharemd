@@ -8,13 +8,10 @@ import { askConfirm, toast } from './dialogs';
  * other peers just see the text change.
  */
 
-const overlay = document.querySelector('#versions')! as HTMLElement;
-const titleEl = document.querySelector('#versions-title')!;
 const listEl = document.querySelector('#versions-list')!;
 const form = document.querySelector('#versions-form')! as HTMLFormElement;
 const labelInput = document.querySelector('#versions-label')! as HTMLInputElement;
 const saveButton = document.querySelector('#versions-save')! as HTMLButtonElement;
-const closeButton = document.querySelector('#versions-close')! as HTMLButtonElement;
 
 let ctx: { path: string; author: string } | null = null;
 
@@ -105,17 +102,16 @@ form.addEventListener('submit', (event) => {
   })();
 });
 
-closeButton.addEventListener('click', closeVersions);
-
 export function closeVersions(): void {
   ctx = null;
-  overlay.hidden = true;
 }
 
+/**
+ * Load a document's named versions into the Versions tab of the shared drawer.
+ * The drawer owns visibility and the close affordance; this only fills the pane.
+ */
 export async function openVersions(path: string, author: string): Promise<void> {
   ctx = { path, author };
-  titleEl.textContent = `${path} — versions`;
-  overlay.hidden = false;
   labelInput.value = '';
   await refresh();
 }
